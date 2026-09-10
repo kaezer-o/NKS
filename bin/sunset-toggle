@@ -1,0 +1,17 @@
+#!/bin/bash
+
+if ! pgrep -x "hyprsunset" > /dev/null; then
+    hyprsunset &
+    sleep 0.5
+fi
+
+STATUS=$(hyprctl -j hyprsunset 2>/dev/null | jq -r '.identity' 2>/dev/null)
+
+#if [ "$STATUS" = "true" ]; then
+#    hyprctl hyprsunset identity false
+#    hyprctl hyprsunset temperature 4350
+#else
+#    hyprctl hyprsunset identity true
+#fi
+
+(sleep 0.05 && swaync-client -p) &

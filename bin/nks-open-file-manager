@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Nautilus is D-Bus activated and may already have a process running.
+# --new-window explicitly requests a distinct browser window on each bind press.
+exec setsid -f nautilus --new-window "file://$HOME" >/dev/null 2>&1

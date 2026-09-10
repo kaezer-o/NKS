@@ -1,0 +1,55 @@
+name: NeKoRoSHELL CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Bash syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            bash -n "$file"
+          done < <(find . -type f \
+            \( -name '*.sh' -o -path './bin/*' -o -path './scripts/*' -o -name 'install.sh' \) \
+            -not -path './.git/*' -print0)
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+          additional_files: 'install.sh scripts .config/themes .config/hypr/scripts home'
+
+  build-cpp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libgtk-layer-shell-dev \
+            nlohmann-json3-dev \
+            jq \
+            pkg-config \
+            libwayland-dev \
+            build-essential
+
+      - name: Build C++ Daemons
+        run: |
+          make all
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nekoroshell-binaries-${{ github.sha }}
+          path: build/
+          retention-days: 7
