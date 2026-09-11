@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Nautilus is a D-Bus application, but invoking it directly with an explicit
-# URI and --new-window requests a new browser window even when Nautilus is
-# already running. The short-lived launcher process must not block Hyprland.
-exec setsid -f nautilus --new-window "$HOME" >/dev/null 2>&1

@@ -1,8 +1,0 @@
-# AUR packages only.
-# These are required because the standalone NKS scripts directly invoke them.
-wallust-git
-mpvpaper
-mpvpaper-stop-git
-wlogout
-tty-clock-git
-bibata-cursor-theme
