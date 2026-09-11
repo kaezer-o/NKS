@@ -29,7 +29,7 @@ else
         fi
 
         if command -v awww-daemon >/dev/null 2>&1; then
-            awww-daemon --format argb &
+            awww-daemon &
         fi
     ) &
     

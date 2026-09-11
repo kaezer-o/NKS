@@ -1,7 +1,7 @@
-@import "$HOME/.cache/wallust/colors-waybar.css";
+@import "colors-wallust.css";
 
 * { background-image: none; box-shadow: none; }
-window { background-color: rgba(12, 12, 12, 0.9); }
+window { background-color: @background-window; }
 
 button {
     margin: 0.625rem;

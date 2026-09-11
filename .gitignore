@@ -1,10 +1,13 @@
-# ==========================================
-# NeKoRoSHELL: User Configurations & Scripts
-# ==========================================
+# Build output
+build/
+*.o
+*.a
 
-.config/hypr/user/configs/*
-.config/hypr/user/scripts/*
-.config/hypr/user/hooks/*
-.config/hypr/user/skins/*
-.config/hypremoji/recents.json
-!.config/hypr/user/templates/
+# Local/runtime state
+.cache/
+.DS_Store
+
+# Temporary merge/editor files
+*.tmp_merge
+*.user_bak_*
+*~

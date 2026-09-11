@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-# Toggle floating for all regular windows on the current workspace.
-active_ws=$(hyprctl activeworkspace -j | jq -r '.id')
-while IFS= read -r address; do
-  [ -n "$address" ] || continue
-  hyprctl dispatch togglefloating "address:$address" >/dev/null 2>&1 || true
-done < <(hyprctl clients -j | jq -r --argjson ws "$active_ws" '.[] | select(.workspace.id == $ws and .floating == false) | .address')

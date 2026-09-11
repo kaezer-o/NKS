@@ -1,6 +1,10 @@
 * {
     background: {{background}};
     foreground: {{foreground}};
+
+    background-window: {{background}}a6;
+    background-input: {{foreground}}26;
+    
     color0: {{color0}};
     color1: {{color1}};
     color2: {{color2}};
@@ -19,6 +23,4 @@
     color15: {{color15}};
     text: {{foreground}};
     text-invert: {{background}};
-    background-window: {{background}}DD;
-    background-input: {{foreground}}20;
 }

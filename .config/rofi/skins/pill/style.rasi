@@ -1,4 +1,4 @@
-@import "~/.cache/wallust/colors-rofi.rasi"
+@import "colors-wallust.rasi"
 
 * {
     font: "JetBrains Mono 12";
@@ -6,10 +6,10 @@
 }
 
 window {
-    width: 28em;
+    width: 31em;
     border: 0.125em;
     border-color: @color13;
-    border-radius: 2em;
+    border-radius: 1.2em;
     background-color: @background-window;
     location: center;
     anchor: center;
@@ -78,3 +78,8 @@ element-text selected.normal {
 element hover {
     background-color: @color13;
 }
+
+window { background-color: rgba(10,10,10,0.65); }
+mainbox { padding: 1em; }
+element { border-radius: 1.25em; }
+inputbar { border-radius: 1em; }

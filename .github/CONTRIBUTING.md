@@ -1,16 +1,25 @@
-## CONTRIBUTIONS
+# CONTRIBUTING
 
-Contributions are welcome!
+Contributions to the standalone Arch Linux / Hyprland repository are welcome.
 
-Something's wrong with the repo or you know better workarounds and alternatives? You can fork the repo and make a pull request. It will be very much appreciated!
+Before changing the repository, keep the source tree coherent as one deployable dotfiles project. In particular:
 
-You are welcome to introduce any changes to the repo. However, I do have to focus on the following:
-- Verifying for multiple distros. (`packages/pkglist-DISTRO.txt`, `install.sh`, etc.) (Please include steps to follow to ensure a working NeKoRoSHELL desktop experience on other distros)
-- Verifying init-agnosticism.
-- The caveats at [Dependencies](https://github.com/NeKoRoSYS/NeKoRoSHELL#dependencies)
-- The [Issue Tracker](https://github.com/NeKoRoSYS/NeKoRoSHELL/issues)
+- Keep `install.sh`, `.config/`, `bin/`, `scripts/`, `src/`, `home/`, and the Arch package manifests consistent with one another.
+- Do not add distribution-specific package manifests or installers to this repository unless the project direction explicitly changes.
+- Do not introduce absolute home-directory paths or machine-specific usernames into shipped configuration.
+- Keep Hyprland configuration compatible with the Lua-based configuration used by the repository.
+- When changing package requirements, update the Arch manifests and the relevant documentation together.
+- When changing a selector, skin, theme, or runtime script, verify that every referenced file exists in a clean checkout.
 
-<br>
+For native helper changes, run:
 
-## Sponsorship
-I am an aspiring software and game developer that currently do stuff solo. [Buying me a coffee](https://ko-fi.com/nekorosys) is not a must, but it will be immensely cherished and appreciated! Editing code and files is not the only way you can contribute to the project :D
+```bash
+make clean
+make -j"$(nproc)"
+```
+
+For shell changes, run `bash -n` on the affected scripts. The GitHub Actions workflow also performs repository-wide Bash syntax validation and the native C++ preflight/build checks.
+
+When submitting a change, describe any new dependency, configuration path, hardware-specific behaviour, or external project integration it introduces.
+
+All third-party material must retain the applicable attribution and licensing requirements. See `README.md` and `LICENSE` for the current project credits and license information.

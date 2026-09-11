@@ -10,7 +10,7 @@ readonly NC='\033[0m'
 readonly REPO="nekorosys/nekoroshell"
 readonly TEMP_DIR="/tmp/nekoroshell_upgrade"
 readonly CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
-readonly CORE_CONFIGS=(btop cava fastfetch hypr hypremoji kitty rofi swaync themes wallpapers wallust waybar wlogout)
+readonly CORE_CONFIGS=(btop cava fastfetch hypr kitty rofi swaync themes wallpapers wallust waybar wlogout)
 
 log_info()    { echo -e "${BLUE}$1${NC}"; }
 log_success() { echo -e "  [✔] ${GREEN}$1${NC}"; }
@@ -21,7 +21,7 @@ usage() {
     echo -e "${BLUE}NeKoRoSHELL Management Utility${NC}\n"
     echo -e "Usage: nekoroshell [COMMAND]\n"
     echo -e "Commands:"
-    echo -e "  ${GREEN}update${NC}        Fetch and apply the latest NeKoRoSHELL release."
+    echo -e "  ${GREEN}update${NC}        Fetch and apply the latest NeKoRoSHELL release files."
     echo -e "  ${GREEN}create-skin${NC}   Create a new empty skin template for a specific feature."
     echo -e "  ${GREEN}create-theme${NC}  Create a new theme script bundle from existing skins."
     echo -e "  ${RED}uninstall${NC}     Remove all NeKoRoSHELL configurations and scripts.\n"
@@ -122,10 +122,13 @@ uninstall() {
         fi
     done
 
-    local latest_backup=$(ls -1 "$HOME/nekoroshell_backup_"*.tar.gz 2>/dev/null | sort -V | tail -n 1)
+    local latest_backup=$(ls -1 "$HOME/NeKoRoSHELL-backups/"nekoroshell-*.tar.gz 2>/dev/null | sort -V | tail -n 1)
+    if [[ -z "$latest_backup" ]]; then
+        latest_backup=$(ls -1 "$HOME/nekoroshell_backup_"*.tar.gz 2>/dev/null | sort -V | tail -n 1)
+    fi
     if [[ -n "$latest_backup" ]]; then
         log_info "\nRestoring from backup archive: $(basename "$latest_backup")..."
-        tar -xzf "$latest_backup" -C "$CONF_DIR"
+        tar -xzf "$latest_backup" -C "$HOME"
         log_success "Configurations recovered from tarball."
     else
         log_warn "No tarball backup found to restore."
@@ -138,6 +141,8 @@ uninstall() {
             echo -e "  Removed directory: ${YELLOW}$bin_dir${NC}"
         fi
     done
+
+    rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/nekoroshell"
 
     for f in .p10k.zsh .face.icon change-avatar.sh; do
         if [[ -f "$HOME/$f" ]]; then
@@ -195,9 +200,11 @@ update() {
     [[ ! -d "$TEMP_DIR/.config" ]] && { log_error "Error: Extraction failed or invalid repository structure."; exit 1; }
 
     log_info "Pre-processing downloaded files to match your system..."
-    local search="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)"
-    local rep_escaped=$(echo "$HOME" | sed 's/|/\\|/g; s/\\/\\\\/g')
-    find "$TEMP_DIR/.config" -type f \( -name "*.config" -o -name "*.css" -o -name "*.rasi" -o -name "*.conf" -o -name "*.sh" -o -name "*.json" -o -name "*.jsonc" -o -name "*.lua" -o -name "*.py" -o -name "*.yaml" \) -exec grep -l "$search" {} + 2>/dev/null | xargs -r sed -i "s|$search|$rep_escaped|g" || true
+    local rep_escaped
+    rep_escaped=$(printf '%s' "$HOME" | sed 's/[&|\\]/\\&/g')
+    while IFS= read -r -d '' file; do
+        sed -E -i "s#/home/[^/[:space:]]+#$rep_escaped#g" "$file" || true
+    done < <(find "$TEMP_DIR/.config" -type f \( -name "*.config" -o -name "*.css" -o -name "*.rasi" -o -name "*.conf" -o -name "*.sh" -o -name "*.json" -o -name "*.jsonc" -o -name "*.lua" -o -name "*.py" -o -name "*.yaml" \) -print0)
 
     log_info "\nComparing configurations..."
     while IFS= read -r -u 3 new_file; do
@@ -244,7 +251,7 @@ update() {
             local binaries=("show-keybinds" "navbar-hover" "navbar-watcher" "hypr-nice" "eject-forbidden")
             
             for bin in "${binaries[@]}"; do
-                if make "build/$bin" >/dev/null 2>&1; then
+                if make "build/$bin"; then
                     rm -f "$bin_dir/$bin" 2>/dev/null || true
                     cp "build/$bin" "$bin_dir/" || true
                     log_success "Successfully compiled and updated \"$bin\""
@@ -284,12 +291,12 @@ create_skin() {
     local feature_name=""
 
     case "$feature_opt" in
-        1) feature_name="navbar"; target_dir="$CONF_DIR/waybar/skins"; required_files=("style.css" "layout.jsonc" "navbar-hover.conf" "layerrule.conf") ;;
-        2) feature_name="launcher"; target_dir="$CONF_DIR/rofi/skins"; required_files=("config.rasi" "style.rasi" "layerrule.conf") ;;
+        1) feature_name="navbar"; target_dir="$CONF_DIR/waybar/skins"; required_files=("style.css" "layout.jsonc" "navbar-hover.conf") ;;
+        2) feature_name="launcher"; target_dir="$CONF_DIR/rofi/skins"; required_files=("config.rasi" "style.rasi") ;;
         3) feature_name="lockscreen"; target_dir="$CONF_DIR/hypr/hyprlock/skins"; ;;
-        4) feature_name="panel"; target_dir="$CONF_DIR/swaync/skins"; required_files=("style.css" "config.json" "layerrule.conf") ;;
+        4) feature_name="panel"; target_dir="$CONF_DIR/swaync/skins"; required_files=("style.css" "config.json") ;;
         5) feature_name="power"; target_dir="$CONF_DIR/wlogout/skins"; required_files=("style.css" "layout") ;;
-        6) feature_name="windows"; target_dir="$CONF_DIR/hypr/user/skins"; required_files=("appearance.conf" "animations.conf") ;;
+        6) feature_name="windows"; target_dir="$CONF_DIR/hypr/nks-window-skins"; ;;
         *) echo -e "${RED}Invalid option.${NC}"; exit 1 ;;
     esac
 
@@ -298,8 +305,24 @@ create_skin() {
 
     skin_name="${skin_name// /_}"
 
+    if [[ "$feature_name" == "windows" ]]; then
+        local skin_path="$target_dir/$skin_name.lua"
+        if [[ -e "$skin_path" ]]; then
+            echo -e "${RED}Error: Skin '$skin_name' already exists at $skin_path${NC}"
+            exit 1
+        fi
+        cat > "$skin_path" <<EOF
+-- NeKoRoSHELL standalone Lua window skin: $skin_name
+-- Add Hyprland Lua window rules here.
+EOF
+        echo -e "\n${GREEN}Success!${NC} Created empty Lua window skin '$skin_name' in:"
+        echo -e "${YELLOW}$skin_path${NC}"
+        echo "Edit this file to define the skin, then use 'customize' -> Windows."
+        return 0
+    fi
+
     local skin_path="$target_dir/$skin_name"
-    if [[ -d "$skin_path" ]]; then
+    if [[ -e "$skin_path" ]]; then
         echo -e "${RED}Error: Skin '$skin_name' already exists at $skin_path${NC}"
         exit 1
     fi
@@ -408,8 +431,8 @@ if [[ ! -d "$CONF_DIR/wlogout/skins/$POWER" ]]; then
     echo "Error: Power options skin '$POWER' not found."
     missing=1
 fi
-if [[ ! -d "$CONF_DIR/hypr/user/skins/$WINDOWS" ]]; then
-    echo "Error: Windows skin '$WINDOWS' not found."
+if [[ ! -f "$CONF_DIR/hypr/nks-window-skins/$WINDOWS.lua" ]]; then
+    echo "Error: Lua windows skin '$WINDOWS' not found."
     missing=1
 fi
 

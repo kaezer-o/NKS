@@ -1,24 +1,67 @@
 > [!WARNING]
-> These dotfiles still work as I am writing this on February 20, 2026. Future updates could break one or more of the packages and I may or may not be active enough to fix it for you (please do contact me on **Discord** - **@nekorosys** - and I'll be happy to entertain any of your concerns). Worry not! For as long as I keep using Linux, it's suffice to say that this repo will be maintained for a very long time because it has always been intended to store a clean slate of my desktop environment. I do recommend fixing it yourself just in case it happens because it might help you learn more about maintaining your desktop experience!
-<br>
+> This repository targets a standalone Arch Linux installation using Hyprland. Package versions and upstream projects can change over time, so a configuration that worked on one installation may require adjustment after a system upgrade.
 
-# FAQ / Troubleshooting
+# Support / Troubleshooting
 
-1. Help! My keybinds don't work!
-   
-   For a quick sanity check, do the following in order:
-   - Assuming you've just installed NeKoRoSHELL and you're still in the cloned folder, do `cd` to return to `$HOME` (or just open another terminal).
-   - Verify script permissions by typing `chmod +x $HOME/bin/nekoroshell/*` and/or `chmod +x $HOME/.local/bin/nekoroshell/*` then press Enter. This will allow the scripts used in the custom hyprland keybinds to be ran by your keyboard.
-   If that didn't work, make sure the `environment` config file in `.config/hypr/configs/` has this line:
-   ```bash
-   env = PATH,$HOME/bin/nekoroshell:$HOME/.local/bin/nekoroshell:$PATH
-   ```
-   If not, type it in and then restart your PC.
-<br>
+## First checks
 
-# Guidelines for Opening an Issue
+Confirm the repository was installed as intended:
 
-1. Avoid duplicates/spam. Please carefully search at the [Issue Tracker](https://github.com/NeKoRoSYS/NeKoRoSHELL/issues) if your issue has already been recorded/posted.
-2. Make your title brief and concise.
-3. Describe your issue and list the steps required to reproduce the issue, if applicable. (eg. bug, crashes, etc.)
-4. Please be respectful with each other. ([Code of Conduct](https://github.com/NeKoRoSYS/NeKoRoSHELL/tree/main?tab=coc-ov-file))
+```bash
+command -v hyprland
+command -v waybar
+command -v swaync
+ls -l ~/.config/hypr/hyprland.lua
+```
+
+For graphics-related problems:
+
+```bash
+nks-gpu-info
+cat ~/.cache/nekoroshell/gpu-profile
+cat ~/.cache/nekoroshell/detected-gpus.txt
+```
+
+For Hyprland configuration errors:
+
+```bash
+hyprctl configerrors
+```
+
+## Keybindings do not work
+
+The active bindings are defined by:
+
+```text
+~/.config/hypr/hyprland.lua
+```
+
+The repository's command directory is:
+
+```text
+~/.local/bin/nekoroshell/
+```
+
+Check that it is present and readable:
+
+```bash
+ls -la ~/.local/bin/nekoroshell/
+```
+
+The installer also places the NKS command directory first in the user's PATH through the Hyprland environment and Zsh configuration.
+
+## Existing dotfiles
+
+The installer intentionally refuses to silently replace an existing Hyprland/dotfiles setup. Use `--replace-existing` only after reviewing the backup and deciding that NKS should become the active configuration.
+
+## Reporting a bug
+
+Include:
+
+1. Arch Linux kernel and Hyprland versions.
+2. GPU model and `nks-gpu-info` output.
+3. The exact command or keybinding that fails.
+4. Relevant output from `hyprctl configerrors` or the terminal running the affected command.
+5. Whether the problem occurs on a clean installation or an existing dotfiles replacement.
+
+Do not include passwords, private keys, tokens, or other sensitive information in issue reports.

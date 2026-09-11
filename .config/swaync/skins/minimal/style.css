@@ -1,4 +1,4 @@
-@import "$HOME/.cache/wallust/colors-waybar.css";
+@import "colors-wallust.css";
 
 :root {
     --noti-bg: color-mix(in srgb, @background, transparent 39%); 
@@ -60,7 +60,7 @@ notificationwindow, blankwindow {
 }
 
 .control-center .placeholder {
-  color: @text-invert;
+  color: @text;
 }
 
 
@@ -317,3 +317,5 @@ notificationwindow, blankwindow {
   color: @text;
 }
 
+
+:root { --noti-radius: .2rem; --noti-margin: .35rem; --noti-bg: transparent; --noti-border: @color7; } .notification { border-width: .06rem; }

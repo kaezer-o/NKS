@@ -1,3 +1,5 @@
+#include <cctype>
+#include <cerrno>
 #include <iostream> 
 #include <fstream> 
 #include <string> 

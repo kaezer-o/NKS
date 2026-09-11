@@ -39,13 +39,17 @@ apply_config() {
     local source_abs="$3"
 
     check_user_mod "$target"
-    [[ -L "$target" ]] && rm -f "$target"
+
+    if [ -L "$target" ]; then
+        rm -f "$target"
+    fi
 
     local target_dir target_base tmp_target
     target_dir="$(dirname "$target")"
     target_base="$(basename "$target")"
     mkdir -p "$target_dir"
     tmp_target="$(mktemp "$target_dir/.${target_base}.nks.XXXXXX")"
+    trap 'rm -f -- "$tmp_target"' RETURN
 
     case "$type" in
         css)
@@ -68,14 +72,10 @@ apply_config() {
         copy)
             cp "$source_abs" "$tmp_target"
             ;;
-        *)
-            rm -f "$tmp_target"
-            echo "Error: unknown configuration type '$type'" >&2
-            return 1
-            ;;
     esac
 
     mv -f -- "$tmp_target" "$target"
+    trap - RETURN
     save_hash "$target"
 }
 
@@ -124,36 +124,51 @@ apply_ui_skin() {
             name="Windows"
             icon="preferences-desktop-theme"
             msg="Select a Windows skin."
-            dir="$CONF_DIR/hypr/user/skins"
-            req_files=("appearance.conf" "animations.conf")
+            dir="$CONF_DIR/hypr/nks-window-skins"
+            req_files=()
             ;;
     esac
 
     if [ -z "$choice" ]; then
         makenotif customize "$icon" "$name" "$msg" true
-        choice=$(ls "$dir" | rofi -dmenu -p "Select $name Skin")
+        if [ "$feature" = "windows" ]; then
+            choice=$(find "$dir" -maxdepth 1 -type f -name "*.lua" -printf "%f\n" | sed 's/\.lua$//' | sort | rofi -dmenu -p "Select $name Skin")
+        else
+            choice=$(find "$dir" -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort | rofi -dmenu -p "Select $name Skin")
+        fi
     fi
 
     [ -z "$choice" ] && exit 0
 
     local path_skin="$dir/$choice"
 
-    if [ ! -d "$path_skin" ]; then
+    if [ "$feature" = "windows" ]; then
+        if [ ! -f "$dir/$choice.lua" ]; then
+            echo "Error: Lua window skin '$choice' not found in $dir"
+            exit 1
+        fi
+    elif [ ! -d "$path_skin" ]; then
         echo "Error: Skin '$choice' not found in $dir"
         exit 1
     fi
 
-    for req_file in "${req_files[@]}"; do
-        if [ ! -f "$path_skin/$req_file" ]; then
-            makenotif customize dialog-error "$name Error" "Skin '$choice' is missing required file: $req_file" true
-            echo "Error: Skin '$choice' missing $req_file. Aborting."
-            exit 1
-        fi
-    done
+    if [ "$feature" != "windows" ]; then
+        for req_file in "${req_files[@]}"; do
+            if [ ! -f "$path_skin/$req_file" ]; then
+                makenotif customize dialog-error "$name Error" "Skin '$choice' is missing required file: $req_file" true
+                echo "Error: Skin '$choice' missing $req_file. Aborting."
+                exit 1
+            fi
+        done
+    fi
 
-    sed -i "\|^source = $dir/|d" "$HYPR_RULES"
-    if [[ -f "$path_skin/layerrule.conf" ]]; then
-        echo "source = $path_skin/layerrule.conf" >> "$HYPR_RULES"
+    # Standalone Lua mode does not maintain a generated hyprlang source file.
+    # Keep legacy layerrule support when an external integration provides the file.
+    if [[ -f "$HYPR_RULES" ]]; then
+        sed -i "\|^source = $dir/|d" "$HYPR_RULES"
+        if [[ -f "$path_skin/layerrule.conf" ]]; then
+            echo "source = $path_skin/layerrule.conf" >> "$HYPR_RULES"
+        fi
     fi
 
     case "$feature" in
@@ -170,7 +185,8 @@ apply_ui_skin() {
         navbar)
             apply_config css "$style" "$path_skin/style.css"
             apply_config jsonc "$config" "$path_skin/layout.jsonc"
-            cp "$path_skin/navbar-hover.conf" "$NAVBAR_HOVER_CONF" || true
+            mkdir -p "$(dirname "$NAVBAR_HOVER_CONF")"
+            cp "$path_skin/navbar-hover.conf" "$NAVBAR_HOVER_CONF"
 
             killall -q navbar-hover navbar-watcher 2>/dev/null || true
             killall -q waybar 2>/dev/null || true
@@ -189,12 +205,14 @@ apply_ui_skin() {
             apply_config copy "$config" "$path_skin/layout"
             ;;
         windows)
-            local app_conf="$CONF_DIR/hypr/user/configs/appearance.conf"
-            local anim_conf="$CONF_DIR/hypr/user/configs/animations.conf"
-            
-            apply_config hypr "$app_conf" "$path_skin/appearance.conf"
-            apply_config hypr "$anim_conf" "$path_skin/animations.conf"
-            
+            local state_dir="${XDG_CACHE_HOME:-$HOME/.cache}/nekoroshell"
+            local state_file="$state_dir/window_skin"
+            mkdir -p "$state_dir"
+            if [ ! -f "$dir/$choice.lua" ]; then
+                echo "Error: unsupported Lua window skin '$choice'"
+                exit 1
+            fi
+            printf '%s\n' "$choice" > "$state_file"
             if command -v hyprctl >/dev/null 2>&1; then
                 hyprctl reload >/dev/null 2>&1
             fi
@@ -272,7 +290,9 @@ case "$FEATURE" in
             TARGET_CONF="$(find "$SKIN_DIR/$CHOICE" -maxdepth 1 -name "*.conf" | head -n 1)"
             
             if [ -n "$TARGET_CONF" ]; then
-                echo "source = $TARGET_CONF" > "$MAIN"
+                tmp_lock="$(mktemp "$(dirname "$MAIN")/.hyprlock.conf.nks.XXXXXX")"
+                printf 'source = %s\n' "$TARGET_CONF" > "$tmp_lock"
+                mv -f -- "$tmp_lock" "$MAIN"
                 makenotif customize preferences-desktop-theme Lockscreen "Layout changed to: $CHOICE" true
             else
                 echo "Error: No .conf file found in $SKIN_DIR/$CHOICE"

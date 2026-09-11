@@ -1,716 +1,960 @@
 #!/usr/bin/env bash
-set -e
-set -o pipefail
+set -Eeuo pipefail
 
-readonly GREEN='\033[0;32m'
-readonly BLUE='\033[0;34m'
-readonly RED='\033[0;31m'
-readonly NC='\033[0m'
+readonly NKS_VERSION="1.6-standalone"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+readonly TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+readonly BACKUP_DIR_NAME="NeKoRoSHELL-backups"
+readonly CONFIGS=(btop cava fastfetch hypr kitty rofi swaync wallpapers wallust waybar wlogout themes)
 
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
-readonly TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-readonly CONFIGS=(btop cava fastfetch hypr hypremoji kitty rofi swaync systemd wallpapers wallust waybar wlogout themes)
+GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 
-XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
-XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-
-DRY_RUN=0
-NO_CONFIRM=0
-INSTALL_TYPE=""
-USER_BIN_DIR=""
+TARGET_HOME=""
 OS_ID=""
 AUR_HELPER=""
-TARGET_USER=""
+USER_BIN_DIR=""
+BACKUP_ARCHIVE=""
+REPLACEMENT_MODE=0
+NO_CONFIRM=0
+CLI_USER=""
 
-cleanup_install_temp() {
-    [[ -n "${NKS_PACKAGE_FILE_OVERRIDE:-}" ]] && rm -f -- "$NKS_PACKAGE_FILE_OVERRIDE" 2>/dev/null || true
-}
-trap cleanup_install_temp EXIT
+if [[ "$EUID" -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    TARGET_USER="$SUDO_USER"
+else
+    TARGET_USER="${USER:-}"
+fi
+DRY_RUN=0
+MOVED_TARGETS=()
+DEPLOY_STAGE=""
 
-log_info()    { echo -e "${BLUE}$1${NC}"; }
-log_success() { echo -e "  [✔] ${GREEN}$1${NC}"; }
-log_warn()    { echo -e "  [!] ${RED}$1${NC}"; }
-log_error()   { echo -e "${RED}$1${NC}"; }
+log_info() { printf '%b==> %s%b\n' "$BLUE" "$*" "$NC"; }
+log_ok()   { printf '  %b[OK]%b %s\n' "$GREEN" "$NC" "$*"; }
+log_warn() { printf '  %b[WARN]%b %s\n' "$YELLOW" "$NC" "$*"; }
+log_err()  { printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$*" >&2; }
+die() { log_err "$*"; exit 1; }
 
-execute() {
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        echo -e "  ${BLUE}[DRY-RUN]${NC} Would execute: $*"
+run() {
+    if (( DRY_RUN )); then
+        printf '  %b[DRY-RUN]%b' "$BLUE" "$NC"
+        printf ' %q' "$@"
+        printf '\n'
     else
         "$@"
     fi
 }
 
-parse_arguments() {
-    for arg in "$@"; do
-        if [[ "$arg" == "--no-confirm" || "$arg" == "-y" ]]; then
-            NO_CONFIRM=1
-        elif [[ "$arg" == "--dry-run" || "$arg" == "-d" ]]; then
-            DRY_RUN=1
-            echo -e "${BLUE}============ DRY-RUN MODE ============${NC}"
-            echo -e "${GREEN}No files will be modified or copied.${NC}"
-            echo -e "${BLUE}======================================${NC}\n"
-        fi
+usage() {
+    cat <<USAGE
+NeKoRoSHELL ${NKS_VERSION}
+
+Usage:
+  ./install.sh [--replace-existing] [--no-confirm] [--user USER] [--dry-run]
+
+Modes:
+  default             Fresh/clean Arch installation.
+  --replace-existing  Replace an existing desktop/dotfiles configuration after backup.
+  --no-confirm        Suppress confirmation prompts for package/AUR transactions. Does not authorize replacing an existing desktop; combine with --replace-existing for that.
+  --user USER         Select the normal user account when multiple accounts are present.
+  --dry-run           Show actions without changing the system.
+
+This installer is intentionally Arch-only. It installs the current Arch repository
+Hyprland package, NKS runtime dependencies, Qylock SDDM integration (SDDM only),
+and deploys the standalone Lua configuration.
+USAGE
+}
+
+parse_args() {
+    while (($#)); do
+        case "$1" in
+            --replace-existing) REPLACEMENT_MODE=1 ;;
+            --no-confirm|-y) NO_CONFIRM=1 ;;
+            --user)
+                (($# >= 2)) || die "--user requires a username."
+                CLI_USER="$2"
+                shift
+                ;;
+            --dry-run|-d) DRY_RUN=1 ;;
+            --help|-h) usage; exit 0 ;;
+            *) die "Unknown argument: $1" ;;
+        esac
+        shift
     done
+    if [[ -n "$CLI_USER" ]]; then
+        TARGET_USER="$CLI_USER"
+    fi
 }
 
-detect_runtime_user() {
-    TARGET_USER="${SUDO_USER:-${USER:-}}"
-    if [[ -z "$TARGET_USER" ]] || ! id "$TARGET_USER" >/dev/null 2>&1 || [[ "$TARGET_USER" == "root" ]]; then
-        TARGET_USER="$(logname 2>/dev/null || true)"
-    fi
-    if [[ -z "$TARGET_USER" ]] || ! id "$TARGET_USER" >/dev/null 2>&1 || [[ "$TARGET_USER" == "root" ]]; then
-        log_error "No non-root login user could be identified. Run archinstall first, create a normal user, then run this installer from that user's session."
-        exit 1
-    fi
-    if [[ "$HOME" == "/root" ]]; then
-        HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-        export HOME
-    fi
-    log_success "Target user: $TARGET_USER (home: $HOME)"
-}
+find_human_user() {
+    local -a candidates=()
+    local entry username uid home shell
 
-detect_bin_directory() {
-    log_info "Detecting active user bin directory..."
-    local base_bin_dir
-    if [[ -d "$HOME/.local/bin" ]]; then
-        base_bin_dir="$HOME/.local/bin"
-    elif [[ -d "$HOME/bin" ]]; then
-        base_bin_dir="$HOME/bin"
-    else
-        base_bin_dir="$HOME/.local/bin"
+    if [[ "${TARGET_USER:-}" != "" && "${TARGET_USER}" != "root" ]] && id -u "$TARGET_USER" >/dev/null 2>&1; then
+        TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+        [[ -n "$TARGET_HOME" && -d "$TARGET_HOME" ]] && return 0
     fi
 
-    USER_BIN_DIR="$base_bin_dir/nekoroshell"
-    echo -e "${GREEN}Using $USER_BIN_DIR as the target bin directory.${NC}\n"
-}
+    while IFS=: read -r username _ uid _ _ home shell; do
+        [[ "$username" != "root" ]] || continue
+        [[ "$uid" =~ ^[0-9]+$ ]] || continue
+        (( uid >= 1000 && uid < 60000 )) || continue
+        [[ "$home" == /home/* ]] || continue
+        [[ -d "$home" ]] || continue
+        candidates+=("$username")
+    done < /etc/passwd
 
-prompt_install_type() {
-    if [[ "$NO_CONFIRM" -eq 1 ]]; then
-        INSTALL_TYPE="compilation"
-        cache_sudo
-        log_success "--no-confirm selected: Compilation installation."
-        echo ""
+    if ((${#candidates[@]} == 0)); then
+        die "No normal user account with a /home directory was found. Run archinstall, create the normal user, enable sudo/wheel access, then rerun NeKoRoSHELL."
+    fi
+
+    if ((${#candidates[@]} == 1)); then
+        TARGET_USER="${candidates[0]}"
+        TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+        log_ok "Detected normal user: $TARGET_USER ($TARGET_HOME)"
         return 0
     fi
-    log_info "Please choose your installation type:"
-    echo -e "  ${GREEN}Minimal${NC}     - Backup existing configs, deploy dotfiles, and replace hardcoded directories. No dependencies."
-    echo -e "  ${GREEN}Compilation${NC} - Backup existing configs, deploy dotfiles, replace hardcoded directories, and install every dependency.\n"
 
-    while true; do
-        echo -ne "${BLUE}Type 'Minimal' or 'Compilation' to proceed (or 'exit' to abort): ${NC}"
-        read -r choice
-        choice="${choice,,}"
+    if (( NO_CONFIRM )); then
+        die "Multiple normal user accounts were found. Use --user USER with --no-confirm so NKS does not guess the target account."
+    fi
 
-        if [[ "$choice" == "minimal" ]]; then
-            INSTALL_TYPE="minimal"
-            log_success "Minimal installation selected."
-            break
-        elif [[ "$choice" == "compilation" ]]; then
-            INSTALL_TYPE="compilation"
-            log_success "Compilation installation selected."
-            cache_sudo
-            break
-        elif [[ "$choice" == "exit" ]]; then
-            log_error "Installation aborted."
-            exit 0
-        else
-            log_error "Invalid input. Please type 'Minimal' or 'Compilation'."
-        fi
+    log_warn "Multiple normal users were found. Choose the account that should own the NKS desktop."
+    select username in "${candidates[@]}"; do
+        [[ -n "${username:-}" ]] || continue
+        TARGET_USER="$username"
+        TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+        break
     done
-    echo ""
 }
 
-cache_sudo() {
-    log_info "Caching sudo credentials for dependency installation..."
-    sudo -v
-    exec 9> >(
-        while true; do
-            read -r -t 60
-            status=$?
-            if [[ $status -gt 128 ]]; then
-                sudo -n true 2>/dev/null
-            else
-                break
-            fi
-        done
-    )
+reexec_as_user() {
+    if [[ "$EUID" -eq 0 ]]; then
+        [[ "$TARGET_USER" != "root" ]] || die "A non-root desktop user is required. Run archinstall to create one."
+        if (( DRY_RUN )); then
+            log_info "Dry-run: staying as root temporarily; no user/system changes will be executed."
+            return 0
+        fi
+        command -v sudo >/dev/null 2>&1 || { log_info "sudo is missing; installing it before dropping to the detected user..."; pacman -Syu --needed --noconfirm sudo; }
+        id -u "$TARGET_USER" >/dev/null 2>&1 || die "Unable to resolve target user '$TARGET_USER'. Run archinstall to create the user."
+
+        # An Arch installation using archinstall normally configures wheel/sudo. Do not
+        # silently edit sudoers here; instead, verify the user can elevate when needed.
+        if ! sudo -n -u "$TARGET_USER" true 2>/dev/null; then
+            log_info "Re-entering installer as $TARGET_USER. sudo may ask for the account password when system packages are installed."
+        fi
+        exec sudo -iu "$TARGET_USER" -- bash "$SCRIPT_DIR/install.sh" "$@"
+    fi
 }
 
 detect_os() {
-    log_info "Detecting operating system details..."
-    if [[ -f /etc/os-release ]]; then
-        source /etc/os-release
-        OS_ID=$ID
-        if [[ "$OS_ID" == "linuxmint" ]] || [[ "$OS_ID" == "pop" ]]; then
-            OS_ID="ubuntu"
-        fi
+    [[ -r /etc/os-release ]] || die "/etc/os-release is missing. This installer requires Arch Linux."
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    OS_ID="${ID:-}"
+    [[ "$OS_ID" == "arch" ]] || die "Unsupported OS '$OS_ID'. This standalone installer targets Arch Linux only."
+    command -v pacman >/dev/null 2>&1 || die "pacman was not found."
+    log_ok "Detected Arch Linux."
+}
+
+ensure_runtime_user() {
+    find_human_user
+    [[ "$TARGET_HOME" == /home/* ]] || die "The selected user's home directory is invalid: $TARGET_HOME"
+    [[ "$(id -u "$TARGET_USER")" -ge 1000 ]] || die "The target account must be a normal non-root user."
+    USER_BIN_DIR="$TARGET_HOME/.local/bin/nekoroshell"
+    if (( DRY_RUN )); then
+        log_info "Dry-run: would prepare $TARGET_HOME/.local/bin and $TARGET_HOME/.cache/nekoroshell for $TARGET_USER."
+        return 0
+    fi
+    mkdir -p "$TARGET_HOME/.local/bin" "$TARGET_HOME/.cache/nekoroshell"
+    chown -R "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$TARGET_HOME/.local/bin" "$TARGET_HOME/.cache/nekoroshell" 2>/dev/null || true
+}
+
+require_user_sudo() {
+    if (( DRY_RUN )); then
+        log_info "Dry-run: skipping sudo credential validation."
+        return 0
+    fi
+    command -v sudo >/dev/null 2>&1 || die "sudo is required for system package/service changes. Install/configure sudo for $TARGET_USER (normally via archinstall), then rerun."
+    sudo -v
+    sudo -n true >/dev/null 2>&1 || true
+}
+
+check_existing_frameworks() {
+    local found=0
+    if [[ -f "$TARGET_HOME/.config/hypr/conf/keybindings/default.lua" ]]; then
+        log_warn "An existing Hyprland/dotfiles framework configuration was detected. Standalone mode must not let two desktop frameworks own the same active Hyprland configuration."
+        found=1
+    fi
+    if [[ -f "$TARGET_HOME/.config/hypr/hyprland.conf" ]]; then
+        log_warn "Legacy hyprland.conf exists; Hyprland 0.55+ uses hyprland.lua."
+        found=1
+    fi
+    if ((found)) && ((REPLACEMENT_MODE == 0)); then
+        die "Existing desktop configuration detected. Re-run with --replace-existing after confirming you want NKS to become the active compositor configuration. The installer will create a backup first."
+    fi
+}
+
+install_official_packages() {
+    local pkg_file="$SCRIPT_DIR/packages/pkglist-arch.txt"
+    [[ -f "$pkg_file" ]] || die "Missing package manifest: $pkg_file"
+
+    mapfile -t packages < <(grep -Ev '^\s*(#|$)' "$pkg_file")
+    ((${#packages[@]})) || die "The Arch package manifest is empty."
+
+    log_info "Synchronizing Arch repositories and installing official NKS packages."
+    log_info "Hyprland is installed here by NKS; the installer does not assume it already exists."
+    if (( NO_CONFIRM )); then
+        run sudo pacman -Syu --needed --noconfirm "${packages[@]}"
     else
-        log_error "Cannot detect operating system. /etc/os-release not found."
-        exit 1
-    fi
-    log_success "Detected OS: $OS_ID"
-}
-
-bootstrap_base_dependencies() {
-    log_info "Bootstrapping base dependencies..."
-    
-    if [[ -f /etc/os-release ]]; then
-        source /etc/os-release
+        run sudo pacman -Syu --needed "${packages[@]}"
     fi
 
-    if [[ "$OS_ID" == "arch" || "$ID_LIKE" == *"arch"* ]]; then
-        execute sudo pacman -Syu --needed --noconfirm base-devel git cargo go flatpak
-        if ! command -v yay &> /dev/null; then
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                echo -e "  ${BLUE}[DRY-RUN]${NC} Would clone and install yay from AUR"
-            else
-                rm -rf /tmp/yay
-                sudo -u "$TARGET_USER" git clone https://aur.archlinux.org/yay.git /tmp/yay
-                cd /tmp/yay
-                sudo -u "$TARGET_USER" makepkg -si --noconfirm
-                cd "$SCRIPT_DIR"
-            fi
-        fi
-    elif [[ "$OS_ID" == "fedora" ]]; then
-        execute sudo dnf install -y @development-tools git cargo golang flatpak
-    elif [[ "$OS_ID" == "debian" || "$OS_ID" == "ubuntu" ]]; then
-        execute sudo apt update
-        execute sudo apt install -y build-essential git cargo golang flatpak
-    else
-        log_warn "Unsupported OS for automatic bootstrap. Please install prerequisites manually."
-    fi
-}
-
-enable_multilib_if_needed() {
-    [[ -f /etc/pacman.conf ]] || return 0
-    # lib32 graphics/runtime packages require the Multilib repository.
-    local pkg_file="${NKS_PACKAGE_FILE_OVERRIDE:-packages/pkglist-arch.txt}"
-    if ! grep -Eq '^[[:space:]]*lib32-' "$pkg_file"; then
-        return 0
-    fi
-    if grep -Eq '^\[multilib\]' /etc/pacman.conf; then
-        return 0
-    fi
-    log_info "Enabling Arch multilib repository for 32-bit graphics/runtime dependencies..."
-    sudo cp -a /etc/pacman.conf "/etc/pacman.conf.nks-backup-$TIMESTAMP"
-    sudo sed -i -e '/^#[[]multilib[]]$/,+1 s/^#//' /etc/pacman.conf
-    if ! grep -Eq '^\[multilib\]' /etc/pacman.conf; then
-        printf '
-[multilib]
-Include = /etc/pacman.d/mirrorlist
-' | sudo tee -a /etc/pacman.conf >/dev/null
-    fi
-    sudo pacman -Sy --noconfirm
-}
-
-install_arch_packages() {
-    local pkg_file="${NKS_PACKAGE_FILE_OVERRIDE:-packages/pkglist-arch.txt}"
-    local -a requested official aur missing
-    mapfile -t requested < <(sed 's/[[:space:]"]//g' "$pkg_file" | grep -vE '^$|^#')
-    official=(); aur=(); missing=()
-
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log_info "[DRY-RUN] Would resolve and install packages from $pkg_file using pacman/AUR helper."
+    if (( DRY_RUN )); then
+        log_ok "Official package installation would be performed."
         return 0
     fi
 
-    enable_multilib_if_needed
-    log_info "Resolving Arch packages against the current repositories..."
-    local pkg
-    for pkg in "${requested[@]}"; do
-        if pacman -Si "$pkg" >/dev/null 2>&1; then
-            official+=("$pkg")
-        elif "$AUR_HELPER" -Si "$pkg" >/dev/null 2>&1; then
-            aur+=("$pkg")
+    command -v hyprland >/dev/null 2>&1 || die "Hyprland was not installed successfully."
+    command -v sddm >/dev/null 2>&1 || die "SDDM was not installed successfully."
+    log_ok "Official package installation completed."
+}
+
+configure_networking() {
+    if (( DRY_RUN )); then
+        log_info "Would enable NetworkManager when no conflicting network manager is active."
+        return 0
+    fi
+
+    if systemctl is-active --quiet NetworkManager.service || systemctl is-enabled --quiet NetworkManager.service; then
+        log_ok "NetworkManager is already enabled/active."
+        return 0
+    fi
+
+    # Do not silently disable or replace another network stack. On a minimal
+    # archinstall system there is normally no competing network manager, so
+    # enabling NetworkManager is the expected standalone path.
+    if systemctl is-active --quiet systemd-networkd.service || systemctl is-enabled --quiet systemd-networkd.service; then
+        log_warn "systemd-networkd is already active/enabled; leaving it untouched. NKS will still install the NetworkManager applet, but nm-applet requires NetworkManager."
+        return 0
+    fi
+    if systemctl is-active --quiet iwd.service || systemctl is-enabled --quiet iwd.service; then
+        log_warn "iwd is already active/enabled; leaving it untouched. NKS will still install the NetworkManager applet, but nm-applet requires NetworkManager."
+        return 0
+    fi
+
+    sudo systemctl enable --now NetworkManager.service
+    log_ok "NetworkManager enabled and started."
+}
+
+_gpu_lspci_lines() {
+    lspci -nn 2>/dev/null | grep -Ei 'VGA compatible controller|3D controller|Display controller' || true
+}
+
+configure_graphics() {
+    local lines line nvidia_found=0 intel_found=0 amd_found=0
+    local open_nvidia=0 legacy_580=0 unknown_nvidia=0
+    local -a gpu_packages=()
+    lines="$(_gpu_lspci_lines)"
+
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        case "${line,,}" in
+            *nvidia*)
+                nvidia_found=1
+                case "${line,,}" in
+                    *"rtx 20"*|*"rtx 30"*|*"rtx 40"*|*"rtx 50"*|*"gtx 16"*|*"t4"*|*"a100"*|*"a10"*|*"a16"*|*"a2"*|*"a30"*|*"a40"*|*"a800"*|*"h100"*|*"h200"*|*"h800"*|*"l4"*|*"l40"*|*"l40s"*|*"rtx pro"*)
+                        open_nvidia=1 ;;
+                    *"gtx 10"*|*"gt 10"*|*"gtx 9"*|*"gt 9"*|*"gtx 750"*|*"quadro m"*|*"quadro p"*|*"tesla p"*|*"tesla v"*|*"titan v"*|*"titan xp"*)
+                        legacy_580=1 ;;
+                    *)
+                        unknown_nvidia=1 ;;
+                esac
+                ;;
+            *"intel"*) intel_found=1 ;;
+            *"amd"*|*"advanced micro devices"*|*"ati technologies"*) amd_found=1 ;;
+            *) ;;
+        esac
+    done <<< "$lines"
+
+    if (( nvidia_found == 0 && intel_found == 0 && amd_found == 0 )); then
+        log_warn "No Intel/AMD/NVIDIA GPU was positively identified. Keeping generic Mesa support and continuing."
+        if (( DRY_RUN )); then
+            log_info "Would record the generic GPU profile and detected PCI display-controller lines."
         else
-            missing+=("$pkg")
+            printf 'generic\n' > "$TARGET_HOME/.cache/nekoroshell/gpu-profile"
+            printf '%s\n' "${lines:-No PCI display controller lines detected.}" > "$TARGET_HOME/.cache/nekoroshell/detected-gpus.txt"
+        fi
+        return 0
+    fi
+
+    (( intel_found )) && log_ok "Intel graphics detected."
+    (( amd_found )) && log_ok "AMD graphics detected."
+    (( nvidia_found )) && log_ok "NVIDIA graphics detected."
+
+    if (( nvidia_found )); then
+        if (( open_nvidia && legacy_580 )); then
+            log_warn "Mixed modern and Maxwell/Pascal/Volta NVIDIA generations detected. NKS will not install conflicting proprietary driver families automatically; using nouveau fallback."
+            gpu_packages+=(vulkan-nouveau)
+        elif (( unknown_nvidia && !open_nvidia && !legacy_580 )); then
+            log_warn "NVIDIA GPU generation could not be classified safely. Using nouveau fallback instead of risking an incompatible proprietary driver."
+            gpu_packages+=(vulkan-nouveau)
+        elif (( open_nvidia )); then
+            if pacman -Q linux >/dev/null 2>&1 && ! has_nonstandard_kernel; then
+                gpu_packages+=(nvidia-open nvidia-prime)
+            else
+                gpu_packages+=(nvidia-open-dkms dkms nvidia-prime)
+                add_kernel_headers_to_array gpu_packages
+            fi
+            log_ok "Selected the current NVIDIA open kernel-module driver for the detected modern NVIDIA GPU."
+        elif (( legacy_580 )); then
+            gpu_packages+=(dkms)
+            add_kernel_headers_to_array gpu_packages
+            log_ok "Selected the current Arch-supported NVIDIA 580xx DKMS driver for Maxwell/Pascal/Volta."
+        fi
+    fi
+
+    # Install kernel/module prerequisites before any DKMS AUR build.
+    if ((${#gpu_packages[@]})); then
+        mapfile -t gpu_packages < <(printf '%s\n' "${gpu_packages[@]}" | awk 'NF && !seen[$0]++')
+        if (( NO_CONFIRM )); then
+            run sudo pacman -S --needed --noconfirm "${gpu_packages[@]}"
+        else
+            run sudo pacman -S --needed "${gpu_packages[@]}"
+        fi
+    fi
+
+    if (( ! DRY_RUN )) && (( nvidia_found )) && ((${#gpu_packages[@]})) && printf '%s\n' "${gpu_packages[@]}" | grep -Eq '(^|[[:space:]])(dkms|nvidia-open-dkms)([[:space:]]|$)'; then
+        local running_kernel_build="/usr/lib/modules/$(uname -r)/build"
+        if [[ ! -e "$running_kernel_build" ]]; then
+            die "A DKMS-based NVIDIA driver is required, but kernel build files are missing for $(uname -r). Install the matching kernel headers, then rerun NKS."
+        fi
+    fi
+
+    if (( nvidia_found && legacy_580 && !open_nvidia )); then
+        ensure_aur_helper
+        if (( DRY_RUN )); then
+            log_info "Would install AUR package: nvidia-580xx-dkms"
+        elif (( NO_CONFIRM )); then
+            run "$AUR_HELPER" -S --needed --noconfirm nvidia-580xx-dkms
+        else
+            run "$AUR_HELPER" -S --needed nvidia-580xx-dkms
+        fi
+    fi
+
+    local profile="generic"
+    if (( nvidia_found )); then
+        if (( open_nvidia && !legacy_580 && !unknown_nvidia )); then
+            profile="nvidia-modern"
+        elif (( legacy_580 && !open_nvidia && !unknown_nvidia )); then
+            profile="nvidia-580xx"
+        elif (( unknown_nvidia || (open_nvidia && legacy_580) )); then
+            profile="nvidia-nouveau"
+        else
+            profile="nvidia-modern"
+        fi
+    elif (( amd_found && intel_found )); then
+        profile="hybrid-intel-amd"
+    elif (( amd_found )); then
+        profile="amd"
+    elif (( intel_found )); then
+        profile="intel"
+    fi
+
+    if (( DRY_RUN )); then
+        log_info "Detected GPU profile would be: $profile"
+    else
+        printf '%s\n' "${lines:-No PCI display controller lines detected.}" > "$TARGET_HOME/.cache/nekoroshell/detected-gpus.txt"
+        printf '%s\n' "$profile" > "$TARGET_HOME/.cache/nekoroshell/gpu-profile"
+    fi
+}
+
+has_nonstandard_kernel() {
+    local k
+    for k in linux-zen linux-lts linux-hardened; do
+        pacman -Q "$k" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
+add_kernel_headers_to_array() {
+    local -n _arr=$1
+    local k
+    for k in linux linux-zen linux-lts linux-hardened; do
+        if pacman -Q "$k" >/dev/null 2>&1; then
+            case "$k" in
+                linux) _arr+=(linux-headers) ;;
+                linux-zen) _arr+=(linux-zen-headers) ;;
+                linux-lts) _arr+=(linux-lts-headers) ;;
+                linux-hardened) _arr+=(linux-hardened-headers) ;;
+            esac
         fi
     done
-
-    if ((${#official[@]})); then
-        log_info "Installing ${#official[@]} official Arch packages."
-        sudo pacman -S --needed --noconfirm "${official[@]}"
-    fi
-    if ((${#aur[@]})); then
-        log_info "Installing ${#aur[@]} AUR packages through $AUR_HELPER."
-        "$AUR_HELPER" -S --needed --noconfirm "${aur[@]}"
-    fi
-    if ((${#missing[@]})); then
-        log_warn "Unavailable package names: ${missing[*]}"
-    fi
 }
 
-install_bulk_packages() {
-    local target_os="$1"
-    shift
-    if [[ "$target_os" == "arch" ]]; then
-        install_arch_packages
-        return 0
-    fi
-    local pkg_file="packages/pkglist-${target_os}.txt"
-    local install_cmd=("$@")
-    if [[ -f "$pkg_file" ]]; then
-        mapfile -t pkg_array < <(sed 's/[[:space:]"]//g' "$pkg_file" | grep -vE '^$|^#')
-        if ((${#pkg_array[@]})); then
-            log_info "Installing $target_os packages in bulk..."
-            "${install_cmd[@]}" "${pkg_array[@]}" || log_warn "Bulk install failed. Check output above."
-        fi
-    else
-        log_warn "$pkg_file not found!"
-    fi
+detect_connected_outputs() {
+    local status base output
+    for status in /sys/class/drm/card*-*/status; do
+        [[ -f "$status" ]] || continue
+        [[ "$(cat "$status" 2>/dev/null || true)" == "connected" ]] || continue
+        base="$(basename "$(dirname "$status")")"
+        output="${base#*-}"
+        case "$output" in
+            eDP-*|HDMI-*|DP-*|DVI-*|VGA-*|USB-C-*|DisplayPort-*) printf '%s\n' "$output" ;;
+        esac
+    done | awk 'NF && !seen[$0]++'
 }
 
-install_gpu_drivers() {
-    log_info "Detecting graphics hardware and installing matching userspace/drivers..."
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log_info "[DRY-RUN] Would install the graphics stack selected by GPU detection."
+generate_hardware_lua() {
+    local out="$TARGET_HOME/.config/hypr/hardware.lua"
+    local profile="generic"
+    [[ -f "$TARGET_HOME/.cache/nekoroshell/gpu-profile" ]] && profile="$(cat "$TARGET_HOME/.cache/nekoroshell/gpu-profile")"
+    if (( DRY_RUN )); then
+        log_info "Would generate $out for GPU profile: $profile and connected display outputs."
         return 0
     fi
-    local info="$(lspci -nn 2>/dev/null | grep -Ei 'VGA compatible controller|3D controller|Display controller' || true)"
-    if grep -qi 'NVIDIA' <<<"$info"; then
-        if grep -Eqi '(GTX 10[0-9]{2}|GTX 9[0-9]{2}|GTX 8[0-9]{2}|GTX 7[0-9]{2}|Quadro|Tesla)' <<<"$info"; then
-            log_info "NVIDIA pre-Turing/legacy GPU detected; using the current Arch legacy NVIDIA package family."
-            "$AUR_HELPER" -S --needed --noconfirm nvidia-580xx-dkms nvidia-580xx-utils lib32-nvidia-580xx-utils || log_warn "Legacy NVIDIA package install failed; Nouveau will remain available."
+
+    mapfile -t connected_outputs < <(detect_connected_outputs)
+    {
+        printf '%s\n' '-- Auto-generated by NeKoRoSHELL. Do not edit manually.'
+        printf '%s\n' '-- Hardware and connected-monitor information is regenerated by the installer.'
+        case "$profile" in
+            nvidia-modern|nvidia-580xx)
+                printf '%s\n' 'hl.env("LIBVA_DRIVER_NAME", "nvidia")'
+                printf '%s\n' 'hl.env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")'
+                ;;
+            *)
+                printf '%s\n' '-- No NVIDIA-specific compositor environment is required.'
+                ;;
+        esac
+        if ((${#connected_outputs[@]})); then
+            printf '%s\n' '-- Connected DRM outputs detected during installation.'
+            local output
+            for output in "${connected_outputs[@]}"; do
+                printf 'hl.monitor({ output = %q, mode = "preferred", position = "auto", scale = 1 })\n' "$output"
+            done
         else
-            log_info "NVIDIA Turing-or-newer GPU detected; using nvidia-open."
-            "$AUR_HELPER" -S --needed --noconfirm nvidia-open nvidia-utils lib32-nvidia-utils nvidia-prime || log_warn "NVIDIA open-driver install failed; verify the GPU/driver pairing manually."
+            printf '%s\n' '-- No connected DRM output was detected. The main configuration supplies a generic preferred-mode fallback.'
         fi
-    elif grep -qi 'AMD\|ATI' <<<"$info"; then
-        "$AUR_HELPER" -S --needed --noconfirm mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon libva-mesa-driver mesa-vdpau || log_warn "Some AMD graphics packages failed to install."
-    elif grep -qi 'Intel' <<<"$info"; then
-        "$AUR_HELPER" -S --needed --noconfirm mesa lib32-mesa vulkan-intel lib32-vulkan-intel intel-media-driver || log_warn "Some Intel graphics packages failed to install."
+    } > "$out"
+    chown "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$out"
+    chmod 0644 "$out"
+
+    if ((${#connected_outputs[@]})); then
+        printf '%s\n' "${connected_outputs[@]}" > "$TARGET_HOME/.cache/nekoroshell/connected-monitors.txt"
+        chown "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$TARGET_HOME/.cache/nekoroshell/connected-monitors.txt"
+        log_ok "Generated display profile: ${connected_outputs[*]}"
     else
-        log_warn "No supported GPU vendor was detected; installing generic Mesa/Vulkan userspace."
-        "$AUR_HELPER" -S --needed --noconfirm mesa lib32-mesa vulkan-icd-loader lib32-vulkan-icd-loader || true
+        printf '%s\n' 'none-detected' > "$TARGET_HOME/.cache/nekoroshell/connected-monitors.txt"
+        chown "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$TARGET_HOME/.cache/nekoroshell/connected-monitors.txt"
+        log_warn "No connected DRM display output was detected during installation; Hyprland will use its preferred-mode fallback."
+    fi
+    log_ok "Generated hardware profile: $profile"
+}
+
+ensure_aur_helper() {
+    if command -v paru >/dev/null 2>&1; then AUR_HELPER=paru; log_ok "Using existing AUR helper: paru"; return 0; fi
+    if command -v yay >/dev/null 2>&1; then AUR_HELPER=yay; log_ok "Using existing AUR helper: yay"; return 0; fi
+
+    if (( DRY_RUN )); then
+        AUR_HELPER=yay
+        log_info "No AUR helper detected; would install yay from the AUR as the normal user."
+        return 0
+    fi
+
+    command -v git >/dev/null 2>&1 || die "git is missing; it should have been installed from the official package manifest."
+    command -v makepkg >/dev/null 2>&1 || die "makepkg is missing; base-devel is required."
+
+    local build_root="$TARGET_HOME/.cache/nekoroshell/yay-build"
+    run rm -rf "$build_root"
+    run mkdir -p "$build_root"
+    log_info "Installing yay as the normal user (AUR build tools must not run as root)."
+    git clone --depth=1 https://aur.archlinux.org/yay.git "$build_root/yay"
+    (cd "$build_root/yay" && makepkg -si --noconfirm)
+    command -v yay >/dev/null 2>&1 || die "yay installation failed."
+    AUR_HELPER=yay
+}
+
+install_aur_packages() {
+    local pkg_file="$SCRIPT_DIR/packages/aurpkglist-arch.txt"
+    [[ -f "$pkg_file" ]] || die "Missing AUR manifest: $pkg_file"
+    mapfile -t packages < <(grep -Ev '^\s*(#|$)' "$pkg_file")
+    ((${#packages[@]})) || return 0
+
+    ensure_aur_helper
+    log_info "Installing NKS packages that are not provided by the official Arch repositories."
+    if (( NO_CONFIRM )); then
+        run "$AUR_HELPER" -S --needed --noconfirm "${packages[@]}"
+    else
+        run "$AUR_HELPER" -S --needed "${packages[@]}"
     fi
 }
 
-install_system_dependencies() {
-    log_info "Installing system dependencies..."
-    
-    case "$OS_ID" in
-        arch|endeavouros|manjaro)
-            if command -v paru &> /dev/null; then AUR_HELPER="paru"
-            elif command -v yay &> /dev/null; then AUR_HELPER="yay"
-            else log_error "Error: yay or paru is required for Arch-based systems."; exit 1; fi
-            local filtered_pkg_file="$XDG_CACHE_HOME/nekoroshell-pkglist-arch.txt"
-            mkdir -p "$XDG_CACHE_HOME"
-            cp -f "$SCRIPT_DIR/packages/pkglist-arch.txt" "$filtered_pkg_file"
-            if pacman -Q jack2 >/dev/null 2>&1; then
-                sed -i '/^pipewire-jack$/d' "$filtered_pkg_file"
-                log_warn "jack2 is already installed; pipewire-jack will be skipped for this install."
+install_zsh_and_shell() {
+    local p10k_dir="$TARGET_HOME/powerlevel10k"
+    if [[ ! -f "$p10k_dir/powerlevel10k.zsh-theme" ]]; then
+        log_info "Installing Powerlevel10k from its upstream Git repository."
+        if (( DRY_RUN )); then
+            log_info "Would clone https://github.com/romkatv/powerlevel10k.git into $p10k_dir"
+        else
+            git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "$p10k_dir"
+            chown -R "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$p10k_dir"
+        fi
+    fi
+
+    local zshrc="$TARGET_HOME/.zshrc"
+    local block_start="# --- NeKoRoSHELL START ---"
+    local block_end="# --- NeKoRoSHELL END ---"
+    if (( ! DRY_RUN )); then
+        touch "$zshrc"
+        sed -i "/${block_start}/,/${block_end}/d" "$zshrc"
+        # NKS does not depend on Oh-My-Zsh. Remove stale loader lines left by an
+        # existing dotfiles setup so a fresh terminal never emits the old source error.
+        sed -i -E '/^[[:space:]]*(source|\.)[[:space:]].*\.oh-my-zsh\/oh-my-zsh\.sh[[:space:]]*$/d' "$zshrc"
+        cat >> "$zshrc" <<'RC'
+
+# --- NeKoRoSHELL START ---
+if [[ -r "$HOME/powerlevel10k/powerlevel10k.zsh-theme" ]]; then
+  source "$HOME/powerlevel10k/powerlevel10k.zsh-theme"
+fi
+[[ -r "$HOME/.p10k.zsh" ]] && source "$HOME/.p10k.zsh"
+
+# Native zsh editing: Ctrl+Left/Right moves by word and Ctrl+Backspace/Delete
+# removes a complete word. These sequences match Kitty's xterm-compatible output.
+bindkey -e
+bindkey '^[[1;5D' backward-word
+bindkey '^[[1;5C' forward-word
+bindkey '^[[1;3D' backward-word
+bindkey '^[[1;3C' forward-word
+bindkey '^H' backward-kill-word
+bindkey '^[[3;5~' kill-word
+
+export PATH="$HOME/.local/bin/nekoroshell:$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:$PATH"
+# --- NeKoRoSHELL END ---
+RC
+        chmod 0644 "$zshrc"
+        if [[ -x /usr/bin/zsh ]]; then
+            sudo usermod -s /usr/bin/zsh "$TARGET_USER"
+        fi
+    else
+        log_info "Would update $zshrc and set /usr/bin/zsh as the login shell."
+    fi
+}
+
+install_home_files() {
+    local -a files=(
+        "home/.p10k.zsh"
+        "home/.face.icon"
+        "home/change-avatar.sh"
+    )
+    local file
+    for file in "${files[@]}"; do
+        [[ -f "$SCRIPT_DIR/$file" ]] || continue
+        run cp "$SCRIPT_DIR/$file" "$TARGET_HOME/$(basename "$file")"
+    done
+    if (( ! DRY_RUN )); then
+        chmod +x "$TARGET_HOME/change-avatar.sh" 2>/dev/null || true
+    fi
+    log_ok "Home-directory support files staged."
+}
+
+create_backup() {
+    local backup_root="$TARGET_HOME/$BACKUP_DIR_NAME"
+    run mkdir -p "$backup_root"
+    BACKUP_ARCHIVE="$backup_root/nekoroshell-$TIMESTAMP.tar.gz"
+
+    local -a backup_items=()
+    local item
+    for item in "${CONFIGS[@]}"; do
+        [[ -e "$TARGET_HOME/.config/$item" ]] && backup_items+=(".config/$item")
+    done
+    for item in .bashrc .zshrc .p10k.zsh .face.icon change-avatar.sh; do
+        [[ -e "$TARGET_HOME/$item" ]] && backup_items+=("$item")
+    done
+    [[ -e "$TARGET_HOME/.local/bin/nekoroshell" ]] && backup_items+=(".local/bin/nekoroshell")
+
+    if ((${#backup_items[@]})); then
+        run tar -czf "$BACKUP_ARCHIVE" -C "$TARGET_HOME" "${backup_items[@]}"
+        if (( DRY_RUN )); then
+            log_ok "Would create backup: $BACKUP_ARCHIVE"
+        else
+            log_ok "Backup created: $BACKUP_ARCHIVE"
+        fi
+    else
+        log_ok "No existing NKS-managed files needed a backup."
+    fi
+}
+
+validate_source_tree() {
+    local path
+    local -a required_files=(
+        ".config/hypr/hyprland.lua"
+        ".config/hypr/hypridle.conf"
+        ".config/hypr/hyprlock.conf"
+        ".config/hypr/hyprsunset.conf"
+        ".config/waybar/config.jsonc"
+        ".config/waybar/style.css"
+        ".config/rofi/config.rasi"
+        ".config/swaync/config.json"
+        ".config/swaync/style.css"
+        ".config/wlogout/layout"
+        ".config/wlogout/style.css"
+        ".config/wallust/wallust-dark.toml"
+        ".config/wallust/wallust-light.toml"
+        "packages/pkglist-arch.txt"
+        "packages/aurpkglist-arch.txt"
+        "Makefile"
+        "bin/customize"
+        "bin/quick-theme"
+        "bin/start-navbar"
+        "bin/nks-gpu-info"
+        "bin/nks-open-file-manager"
+        "scripts/qylock-sddm.sh"
+        "home/.p10k.zsh"
+        "home/.face.icon"
+        "home/change-avatar.sh"
+    )
+    local -a required_dirs=(
+        ".config/hypr/hyprlock/skins"
+        ".config/hypr/nks-window-skins"
+        ".config/hypr/scripts/wallpapers"
+        ".config/waybar/skins"
+        ".config/rofi/skins"
+        ".config/swaync/skins"
+        ".config/wlogout/skins"
+        ".config/themes"
+        ".config/wallpapers"
+        "home"
+        "src"
+    )
+
+    for path in "${required_files[@]}"; do
+        [[ -f "$SCRIPT_DIR/$path" ]] || die "Required repository file is missing: $path"
+    done
+    for path in "${required_dirs[@]}"; do
+        [[ -d "$SCRIPT_DIR/$path" ]] || die "Required repository directory is missing: $path"
+    done
+
+    [[ -f "$SCRIPT_DIR/.config/wallpapers/makima.mp4" ]] || die "Bundled Makima wallpaper is missing."
+    [[ -f "$SCRIPT_DIR/.config/themes/makima/makima.sh" ]] || die "Makima theme entrypoint is missing."
+    [[ -f "$SCRIPT_DIR/.config/hypr/hyprlock/skins/makima/makima.conf" ]] || die "Makima Hyprlock skin is missing."
+    [[ -f "$SCRIPT_DIR/.config/hypr/scripts/wallpapers/apply-makima-palette.sh" ]] || die "Makima palette helper is missing."
+
+    mapfile -t official_pkgs < <(grep -Ev '^\s*(#|$)' "$SCRIPT_DIR/packages/pkglist-arch.txt")
+    mapfile -t aur_pkgs < <(grep -Ev '^\s*(#|$)' "$SCRIPT_DIR/packages/aurpkglist-arch.txt")
+    ((${#official_pkgs[@]})) || die "The official Arch package manifest is empty."
+    ((${#aur_pkgs[@]})) || die "The AUR package manifest is empty."
+    local bad_official bad_aur
+    for bad_official in bibata-cursor-theme wlogout wallust-git mpvpaper mpvpaper-stop-git tty-clock-git awww-git; do
+        if printf '%s\n' "${official_pkgs[@]}" | grep -Fxq "$bad_official"; then
+            die "AUR package '$bad_official' must not appear in the official package manifest."
+        fi
+    done
+    for bad_aur in hyprland awww hyprshot nwg-displays nwg-look rofi waybar; do
+        if printf '%s\n' "${aur_pkgs[@]}" | grep -Fxq "$bad_aur"; then
+            die "Official package '$bad_aur' must not appear in the AUR manifest."
+        fi
+    done
+}
+
+prepare_stage() {
+    DEPLOY_STAGE="$TARGET_HOME/.cache/nekoroshell/.install-stage-$TIMESTAMP"
+    run rm -rf "$DEPLOY_STAGE"
+    run mkdir -p "$DEPLOY_STAGE/old" "$DEPLOY_STAGE/config"
+
+    local conf
+    for conf in "${CONFIGS[@]}"; do
+        [[ -e "$SCRIPT_DIR/.config/$conf" ]] || continue
+        run cp -a "$SCRIPT_DIR/.config/$conf" "$DEPLOY_STAGE/config/"
+    done
+
+    run mkdir -p "$DEPLOY_STAGE/config/hypr"
+    run chmod -R u+rwX "$DEPLOY_STAGE/config"
+    log_ok "Configuration staged before replacement."
+}
+
+rollback_deploy() {
+    local conf
+    for ((i=${#MOVED_TARGETS[@]}-1; i>=0; i--)); do
+        conf="${MOVED_TARGETS[$i]}"
+        rm -rf "$TARGET_HOME/.config/$conf" 2>/dev/null || true
+        if [[ -e "$DEPLOY_STAGE/old/$conf" ]]; then
+            mv "$DEPLOY_STAGE/old/$conf" "$TARGET_HOME/.config/$conf" 2>/dev/null || true
+        fi
+    done
+    MOVED_TARGETS=()
+}
+
+atomic_deploy() {
+    prepare_stage
+    local conf
+    [[ -d "$TARGET_HOME/.config" ]] || run mkdir -p "$TARGET_HOME/.config"
+
+    for conf in "${CONFIGS[@]}"; do
+        [[ -e "$DEPLOY_STAGE/config/$conf" ]] || continue
+        if [[ -e "$TARGET_HOME/.config/$conf" ]]; then
+            if ! run mv "$TARGET_HOME/.config/$conf" "$DEPLOY_STAGE/old/$conf"; then
+                rollback_deploy
+                die "Deployment failed while staging the existing .config/$conf. Backup and rollback were attempted."
             fi
-            if pacman -Q pulseaudio >/dev/null 2>&1; then
-                sed -i '/^pipewire-pulse$/d' "$filtered_pkg_file"
-                log_warn "pulseaudio is already installed; pipewire-pulse will be skipped for this install."
+        fi
+        if ! run mv "$DEPLOY_STAGE/config/$conf" "$TARGET_HOME/.config/$conf"; then
+            if [[ -e "$DEPLOY_STAGE/old/$conf" ]]; then
+                mv "$DEPLOY_STAGE/old/$conf" "$TARGET_HOME/.config/$conf" 2>/dev/null || true
             fi
-            NKS_PACKAGE_FILE_OVERRIDE="$filtered_pkg_file" install_arch_packages
-            rm -f "$filtered_pkg_file"
-            install_gpu_drivers
+            rollback_deploy
+            die "Deployment failed while replacing .config/$conf. Backup and rollback were attempted."
+        fi
+        MOVED_TARGETS+=("$conf")
+    done
+
+    local deployed_conf
+    for deployed_conf in "${CONFIGS[@]}"; do
+        [[ -e "$TARGET_HOME/.config/$deployed_conf" ]] && run chown -R "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$TARGET_HOME/.config/$deployed_conf"
+    done
+    run chown -R "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$TARGET_HOME/.cache/nekoroshell"
+    MOVED_TARGETS=()
+    run rm -rf "$DEPLOY_STAGE"
+    log_ok "NKS configuration deployment completed."
+}
+
+install_binaries() {
+    local bin_dir="$TARGET_HOME/.local/bin/nekoroshell"
+    run mkdir -p "$bin_dir"
+    run cp -a "$SCRIPT_DIR/bin/." "$bin_dir/"
+    run chmod +x "$bin_dir"/* 2>/dev/null || true
+
+    log_info "Compiling NKS native helper daemons."
+    if (( DRY_RUN )); then
+        log_info "Would run make -j$(nproc) and install the resulting binaries into $bin_dir."
+        return 0
+    fi
+    command -v make >/dev/null 2>&1 || die "make is missing."
+    command -v g++ >/dev/null 2>&1 || die "g++ is missing."
+    command -v pkg-config >/dev/null 2>&1 || die "pkg-config is missing."
+    pkg-config --exists wayland-client || die "Wayland client development files are missing."
+    [[ -f /usr/include/nlohmann/json.hpp ]] || die "nlohmann/json.hpp is missing. Install the official Arch package: nlohmann-json."
+    (cd "$SCRIPT_DIR" && make clean && make -j"$(nproc)")
+    cp -a "$SCRIPT_DIR/build/." "$bin_dir/"
+    chmod +x "$bin_dir"/* 2>/dev/null || true
+    chown -R "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$bin_dir"
+    log_ok "Native helper daemons compiled and installed."
+}
+
+finalize_paths_and_permissions() {
+    run mkdir -p "$TARGET_HOME/.local/share" "$TARGET_HOME/.cache/wallust" "$TARGET_HOME/.cache/nekoroshell"
+    run find "$TARGET_HOME/.config" "$USER_BIN_DIR" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+
+    # Ensure the NKS-installed scripts are the ones referenced by PATH first.
+    if (( ! DRY_RUN )); then
+        cat > "$TARGET_HOME/.local/bin/nks-env" <<'ENV'
+#!/usr/bin/env bash
+export PATH="$HOME/.local/bin/nekoroshell:$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:$PATH"
+ENV
+        chmod +x "$TARGET_HOME/.local/bin/nks-env"
+        chown "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$TARGET_HOME/.local/bin/nks-env"
+    fi
+}
+
+verify_hyprland_version() {
+    local version major minor
+    version="$(hyprland --version 2>/dev/null | head -n1 || true)"
+    [[ -n "$version" ]] || die "Unable to query the installed Hyprland version."
+    log_ok "$version"
+    major="$(sed -n 's/.*Hyprland \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1/p' <<<"$version")"
+    minor="$(sed -n 's/.*Hyprland \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\2/p' <<<"$version")"
+    [[ -n "$major" && -n "$minor" ]] || die "Unable to parse the Hyprland version."
+    (( major > 0 || minor >= 55 )) || die "NeKoRoSHELL standalone requires Hyprland 0.55+ because it uses the Lua configuration API."
+}
+
+verify_graphics_stack() {
+    local profile="generic"
+    [[ -f "$TARGET_HOME/.cache/nekoroshell/gpu-profile" ]] && profile="$(cat "$TARGET_HOME/.cache/nekoroshell/gpu-profile")"
+    log_info "Verifying graphics stack: $profile"
+    case "$profile" in
+        nvidia-modern)
+            if pacman -Q nvidia-open >/dev/null 2>&1 || pacman -Q nvidia-open-dkms >/dev/null 2>&1; then
+                log_ok "NVIDIA modern driver package is installed. DRM/KMS will be verified after reboot."
+            else
+                die "NVIDIA modern driver was selected but no nvidia-open package is installed."
+            fi
             ;;
-        fedora)
-            install_bulk_packages "fedora" sudo dnf install -y
+        nvidia-580xx)
+            pacman -Q nvidia-580xx-dkms >/dev/null 2>&1 || die "NVIDIA 580xx DKMS driver was selected but is not installed."
+            log_ok "NVIDIA 580xx DKMS driver is installed. DRM/KMS will be verified after reboot."
             ;;
-        ubuntu|debian)
-            log_error "WARNING: Debian/Ubuntu do not provide Hyprland or its ecosystem natively."
-            log_error "Ensure you have installed them via a 3rd party PPA/script first."
-            sleep 3
-            execute sudo apt-get update
-            install_bulk_packages "debian" sudo apt-get install -y
+        nvidia-nouveau)
+            pacman -Q vulkan-nouveau >/dev/null 2>&1 || die "NVIDIA fallback selected but vulkan-nouveau is missing."
+            log_ok "NVIDIA nouveau fallback is installed."
             ;;
-        gentoo)
-            install_bulk_packages "gentoo" sudo emerge -av --noreplace
+        intel|hybrid-intel-amd)
+            pacman -Q vulkan-intel >/dev/null 2>&1 || die "Intel graphics detected but vulkan-intel is missing."
+            log_ok "Intel Mesa/Vulkan stack is installed."
             ;;
-        *)
-            log_error "Unsupported OS: $OS_ID. Please install dependencies manually."
-            echo -ne "Do you wish to continue with config deployment anyway? (y/n): "
-            read -r continue_ans
-            if [[ ! "$continue_ans" =~ ^[Yy]$ ]]; then exit 1; fi
+        amd)
+            pacman -Q vulkan-radeon >/dev/null 2>&1 || die "AMD graphics detected but vulkan-radeon is missing."
+            log_ok "AMD Mesa/Vulkan stack is installed."
             ;;
     esac
-
-    install_cargo_packages
-    install_go_packages
-    install_flatpaks
 }
 
-install_cargo_packages() {
-    log_info "Checking for packages that require Cargo (Rust)..."
-    if command -v cargo &> /dev/null; then
-        export PATH="$HOME/.cargo/bin:$PATH"
-        if ! command -v wallust &> /dev/null; then
-            log_info "Installing wallust via Cargo as a package-manager fallback..."
-            execute cargo install wallust || log_warn "Failed to install wallust."
-        else
-            log_success "wallust is already installed."
-        fi
-        if ! command -v awww &> /dev/null; then
-            log_warn "awww is not installed after the Arch package stage; wallpaper support will be unavailable until awww is installed."
-        else
-            log_success "awww is already installed."
-        fi
-    else
-        log_warn "Cargo is not installed. Skipping the wallust fallback; awww is provided by the Arch package stage."
-    fi
-}
-
-install_go_packages() {
-    log_info "Checking for packages that require Go..."
-    if command -v go &> /dev/null; then
-        GOPATH=$(go env GOPATH 2>/dev/null || echo "$HOME/go")
-        export PATH="$GOPATH/bin:$PATH"
-        if ! command -v cliphist &> /dev/null; then
-            log_info "Installing cliphist via Go..."
-            execute go install go.senan.xyz/cliphist@latest || log_warn "Failed to install cliphist."
-        else
-            log_success "cliphist is already installed."
-        fi
-    else
-        log_warn "Go is not installed. Skipping cliphist."
-    fi
-}
-
-install_flatpaks() {
-    if command -v flatpak &> /dev/null; then
-        if [[ -f "flatpak.txt" ]]; then
-            log_info "Installing flatpak packages..."
-            execute sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                echo -e "  ${BLUE}[DRY-RUN]${NC} Would install flatpaks listed in flatpak.txt"
-            else
-                grep -vE '^\s*#|^\s*$' flatpak.txt | xargs -r sudo flatpak install -y flathub || log_warn "Some flatpaks failed to install."
-            fi
-        else
-            log_warn "flatpak.txt not found!"
-        fi
-    fi
-}
-
-backup_existing_configs() {
-    log_info "Creating backup of existing configs..."
-    execute mkdir -p "$XDG_CONFIG_HOME"
-    
-    local backup_archive="$HOME/nekoroshell_backup_$TIMESTAMP.tar.gz"
-    local backup_items=()
-
-    for conf in "${CONFIGS[@]}"; do
-        if [[ -e "$XDG_CONFIG_HOME/$conf" ]]; then
-            backup_items+=("$conf")
-        fi
+verify_display_stack() {
+    log_info "Verifying display stack."
+    local drm_devices=() driver_lines
+    shopt -s nullglob
+    for d in /sys/class/drm/card*-eDP-* /sys/class/drm/card*-HDMI-* /sys/class/drm/card*-DP-* /sys/class/drm/card*-DVI-* /sys/class/drm/card*-VGA-*; do
+        [[ -e "$d" ]] || continue
+        drm_devices+=("$d")
     done
+    shopt -u nullglob
 
-    if [[ ${#backup_items[@]} -gt 0 ]]; then
-        execute tar -czf "$backup_archive" -C "$XDG_CONFIG_HOME" "${backup_items[@]}"
-        log_success "Created backup archive at: $backup_archive"
-    else
-        log_success "No existing configs found. Skipping backup."
-    fi
-}
-
-deploy_configs() {
-    log_info "Deploying NeKoRoSHELL configuration files..."
-    for conf in "${CONFIGS[@]}"; do
-        if [[ -d ".config/$conf" || -f ".config/$conf" ]]; then
-            execute rm -rf "$XDG_CONFIG_HOME/$conf"
-            execute cp -a ".config/$conf" "$XDG_CONFIG_HOME/"
-            log_success "Copied $conf"
-        else
-            log_warn ".config/$conf missing in source directory."
-        fi
-    done
-}
-
-initialize_sandbox() {
-    log_info "Initializing user configuration sandbox..."
-    
-    local user_conf_dir="$XDG_CONFIG_HOME/hypr/user/configs"
-    local user_script_dir="$XDG_CONFIG_HOME/hypr/user/scripts"
-    local user_hooks_dir="$XDG_CONFIG_HOME/hypr/user/hooks"
-    local template_dir="$XDG_CONFIG_HOME/hypr/user/templates"
-
-    execute mkdir -p "$user_conf_dir" "$user_script_dir" "$user_hooks_dir"
-
-    if [[ -d "$template_dir" ]]; then
-        for file in "$template_dir"/*.conf; do
-            [ -e "$file" ] || continue 
-            local filename=$(basename "$file")
-            if [ ! -f "$user_conf_dir/$filename" ]; then
-                execute cp "$file" "$user_conf_dir/$filename"
-                echo -e "  Initialized user config: $filename"
-            fi
+    if ((${#drm_devices[@]})); then
+        log_ok "DRM display connectors are present."
+        for d in "${drm_devices[@]}"; do
+            local name status
+            name="$(basename "$d")"
+            status="$(cat "$d/status" 2>/dev/null || echo unknown)"
+            printf '    %s: %s\n' "$name" "$status"
         done
-    fi
-
-    if [ ! -f "$user_script_dir/autostart.sh" ]; then
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            echo -e "  ${BLUE}[DRY-RUN]${NC} Would create initialized user autostart.sh"
-        else
-            echo -e "#!/bin/bash\n# Add your personal startup commands here" > "$user_script_dir/autostart.sh"
-            chmod +x "$user_script_dir/autostart.sh"
-            echo -e "  Initialized user autostart script."
-        fi
-    fi
-
-    [[ ! -f "$user_hooks_dir/post-install.sh" ]] && echo -e "#!/usr/bin/env bash\n# Runs once after NeKoRoSHELL finishes a fresh install." > "$user_hooks_dir/post-install.sh"
-    [[ ! -f "$user_hooks_dir/post-update.sh" ]] && echo -e "#!/usr/bin/env bash\n# Runs every time 'nekoroshell update' completes successfully." > "$user_hooks_dir/post-update.sh"
-    [[ ! -f "$user_hooks_dir/on-theme-change.sh" ]] && echo -e "#!/usr/bin/env bash\n# Runs when a new theme is applied. \$1 is the theme name." > "$user_hooks_dir/on-theme-change.sh"
-    
-    execute chmod +x "$user_hooks_dir"/*.sh 2>/dev/null || true
-}
-
-configure_hardware() {
-    log_info "Analyzing hardware..."
-    local hw_conf="$XDG_CONFIG_HOME/hypr/user/configs/hardware.conf"
-    local gpu="$(lspci -nn 2>/dev/null | grep -Ei 'VGA compatible controller|3D controller|Display controller' | head -1 || true)"
-    mkdir -p "$(dirname "$hw_conf")"
-    {
-        echo '# NeKoRoSHELL Auto-Generated Hardware Profile'
-        if ls /sys/class/power_supply/BAT* >/dev/null 2>&1; then
-            cat <<'EOF'
-# Laptop-specific optimizations
-gesture = 3, horizontal, workspace
-gesture = 3, down, close
-gesture = 4, pinch, fullscreen
-EOF
-        fi
-        if grep -qi 'NVIDIA' <<<"$gpu"; then
-            cat <<'EOF'
-# NVIDIA runtime environment
-env = __GLX_VENDOR_LIBRARY_NAME,nvidia
-env = LIBVA_DRIVER_NAME,nvidia
-env = NVD_BACKEND,direct
-EOF
-        fi
-    } > "$hw_conf"
-    log_success "Generated hardware profile."
-}
-
-configure_monitors() {
-    log_info "Detecting connected monitors..."
-    local monitor_conf="$XDG_CONFIG_HOME/hypr/user/configs/monitors.conf"
-    mkdir -p "$(dirname "$monitor_conf")"
-    mapfile -t outputs < <(for f in /sys/class/drm/card*-*/status; do [[ -f "$f" && "$(cat "$f")" == connected ]] || continue; b="$(basename "$(dirname "$f")")"; printf '%s\n' "${b#*-}"; done | awk 'NF && !seen[$0]++')
-    {
-      echo '###################'
-      echo '### MONITORS ######'
-      echo '###################'
-      if ((${#outputs[@]})); then
-        for out in "${outputs[@]}"; do printf 'monitor = %s, preferred, auto, 1\n' "$out"; done
-        log_success "Configured ${#outputs[@]} detected display output(s)."
-      else
-        echo 'monitor = , preferred, auto, 1'
-        log_warn "No connector reported connected during installation; generic monitor fallback retained."
-      fi
-    } > "$monitor_conf"
-}
-
-patch_hardcoded_paths() {
-    local search="/home/nekorosys"
-    local replace="$HOME"
-    
-    local replace_escaped
-    replace_escaped=$(echo "$replace" | sed 's/|/\\|/g; s/\\/\\\\/g')
-    
-    log_info "Replacing hardcoded paths ($search -> $replace)..."
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        echo -e "  ${BLUE}[DRY-RUN]${NC} Would replace hardcoded paths across config files."
-        return
-    fi
-
-    local target_dirs=()
-    for conf in "${CONFIGS[@]}"; do
-        if [[ -d "$XDG_CONFIG_HOME/$conf" ]]; then
-            target_dirs+=("$XDG_CONFIG_HOME/$conf")
-        fi
-    done
-
-    if [[ ${#target_dirs[@]} -gt 0 ]]; then
-        find "${target_dirs[@]}" -type f \( \
-            -name "*.config" -o -name "*.css" -o -name "*.rasi" \
-            -o -name "*.conf" -o -name "*.sh" -o -name "*.json*" \
-            -o -name "*.lua" -o -name "*.py" -o -name "*.yaml" \
-        \) -exec grep -l "$search" {} + 2>/dev/null | while read -r file; do
-            sed -i "s|$search|$replace_escaped|g" "$file"
-        done
-        log_success "Paths patched successfully."
-    fi
-}
-
-inject_shell_rc() {
-    inject_func() {
-        local shell_rc="$1"
-        local source_rc="$2"
-        
-        local go_bin_path
-        if command -v go &> /dev/null; then
-            go_bin_path="$(go env GOPATH 2>/dev/null || echo "$HOME/go")/bin"
-        else
-            go_bin_path="$HOME/go/bin"
-        fi
-        
-        local export_bin_dir="${USER_BIN_DIR/$HOME/\$HOME}"
-        
-        if [[ ! -f "$shell_rc" ]]; then
-            execute touch "$shell_rc"
-        fi
-        if [[ -f "$shell_rc" ]]; then
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                echo -e "  ${BLUE}[DRY-RUN]${NC} Would inject NeKoRoSHELL path/config blocks into $shell_rc"
-            else
-                sed -i '/# --- NeKoRoSHELL START ---/,/# --- NeKoRoSHELL END ---/d' "$shell_rc"
-                echo -e "\n# --- NeKoRoSHELL START ---" >> "$shell_rc"
-                [[ -f "$source_rc" ]] && cat "$source_rc" >> "$shell_rc"
-                echo "export PATH=\"$export_bin_dir:\$HOME/.cargo/bin:$go_bin_path:\$PATH\"" >> "$shell_rc"
-                echo -e "# --- NeKoRoSHELL END ---" >> "$shell_rc"
-                log_success "Updated $shell_rc"
-            fi
-        fi
-    }
-
-    inject_func "$HOME/.bashrc" "home/.bashrc"
-    inject_func "$HOME/.zshrc" "home/.zshrc"
-
-    [[ -f home/.p10k.zsh ]] && execute cp home/.p10k.zsh "$HOME/"
-    [[ -f home/.face.icon ]] && execute cp home/.face.icon "$HOME/"
-    [[ -f home/change-avatar.sh ]] && execute cp home/change-avatar.sh "$HOME/"
-
-    if [[ -d bin ]]; then
-        log_info "Copying scripts to $USER_BIN_DIR..."
-        execute mkdir -p "$USER_BIN_DIR"
-        execute cp -r bin/* "$USER_BIN_DIR/" 2>/dev/null || true
-    fi
-}
-
-compile_daemons_and_tools() {
-    if ! command -v hyprshot &> /dev/null; then
-        log_info "Downloading hyprshot..."
-        execute mkdir -p "$USER_BIN_DIR"
-        execute curl -sLo "$USER_BIN_DIR/hyprshot" https://raw.githubusercontent.com/Gustash/Hyprshot/main/hyprshot || true
-        execute chmod +x "$USER_BIN_DIR/hyprshot" || true
-    fi
-
-    if [[ ! -d "$HOME/powerlevel10k" ]]; then
-        log_info "Cloning Powerlevel10k theme..."
-        execute git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "$HOME/powerlevel10k" || true
-    fi
-
-    if ! command -v g++ &> /dev/null; then
-        log_error "g++ is not installed. Please install build tools to compile C++ daemons."
-    elif ! command -v pkg-config &> /dev/null; then
-        log_error "pkg-config is not installed. Cannot verify C++ header dependencies."
     else
-        log_info "Checking C++ build dependencies..."
-        local required_libs="wayland-client" 
-        
-        if ! pkg-config --exists $required_libs; then
-            log_error "Missing required C++ development headers: $required_libs"
-            log_error "Please install the corresponding -dev / -devel packages. Compilation aborted."
-        else
-            log_info "Compiling C++ Daemons via Make..."
-            execute mkdir -p "$USER_BIN_DIR"
-            
-            if execute make clean all; then
-                log_success "Successfully compiled all C++ daemons."
-                execute cp build/* "$USER_BIN_DIR/" || log_warn "Failed to copy binaries to $USER_BIN_DIR"
-            else
-                log_error "Compilation failed. Check the output above."
-            fi
-        fi
+        log_warn "No DRM connector entries were found. This can occur in an unusual installation environment; verify with 'ls /sys/class/drm' after reboot."
+    fi
+
+    driver_lines="$(lspci -k 2>/dev/null | grep -E -A3 'VGA compatible controller|3D controller|Display controller' || true)"
+    if grep -Eq 'Kernel driver in use: (i915|xe|amdgpu|nvidia|nouveau)' <<<"$driver_lines"; then
+        log_ok "A supported kernel graphics driver is attached to at least one display controller."
+    else
+        log_warn "No expected kernel graphics driver was reported for the detected display controller(s). Check 'lspci -k' after reboot."
+    fi
+}
+
+verify_nks_tree() {
+    local -a required=(
+        "$TARGET_HOME/.config/hypr/hyprland.lua"
+        "$TARGET_HOME/.config/waybar/config.jsonc"
+        "$TARGET_HOME/.config/waybar/style.css"
+        "$TARGET_HOME/.config/rofi/config.rasi"
+        "$TARGET_HOME/.config/swaync/config.json"
+        "$TARGET_HOME/.config/swaync/style.css"
+        "$TARGET_HOME/.config/wallust/wallust-dark.toml"
+        "$TARGET_HOME/.config/wlogout/layout"
+        "$USER_BIN_DIR/customize"
+        "$USER_BIN_DIR/start-navbar"
+        "$USER_BIN_DIR/nks-open-file-manager"
+        "$TARGET_HOME/.p10k.zsh"
+        "$TARGET_HOME/.face.icon"
+        "$TARGET_HOME/change-avatar.sh"
+    )
+    local f
+    for f in "${required[@]}"; do [[ -e "$f" ]] || die "Installed NKS file is missing: $f"; done
+    command -v hyprland >/dev/null 2>&1 || die "hyprland is missing from PATH."
+    command -v sddm >/dev/null 2>&1 || die "sddm is missing from PATH."
+    command -v waybar >/dev/null 2>&1 || die "waybar is missing from PATH."
+    command -v swaync >/dev/null 2>&1 || die "swaync is missing from PATH."
+    command -v rofi >/dev/null 2>&1 || die "rofi is missing from PATH."
+    command -v awww >/dev/null 2>&1 || die "awww is missing from PATH."
+    command -v mpvpaper >/dev/null 2>&1 || die "mpvpaper is missing from PATH."
+    command -v wallust >/dev/null 2>&1 || die "wallust is missing from PATH."
+    command -v hyprshot >/dev/null 2>&1 || die "hyprshot is missing from PATH."
+    [[ -f /usr/include/nlohmann/json.hpp ]] || die "nlohmann/json.hpp is missing from the system."
+    command -v lspci >/dev/null 2>&1 || die "pciutils/lspci is missing from the system."
+    command -v nautilus >/dev/null 2>&1 || die "nautilus is missing from the system."
+    command -v gnome-text-editor >/dev/null 2>&1 || die "gnome-text-editor is missing from the system."
+    command -v nwg-displays >/dev/null 2>&1 || die "nwg-displays is missing from the system."
+    command -v nwg-look >/dev/null 2>&1 || die "nwg-look is missing from the system."
+    command -v vulkaninfo >/dev/null 2>&1 || die "vulkan-tools/vulkaninfo is missing from the system."
+    [[ -x /usr/bin/qt6ct ]] || die "qt6ct is missing from the system."
+    log_ok "NKS runtime command, graphics-tool, and native-header verification passed."
+
+    if command -v luac >/dev/null 2>&1; then
+        luac -p "$TARGET_HOME/.config/hypr/hyprland.lua"
+        log_ok "Lua syntax check passed for hyprland.lua."
+    else
+        log_warn "luac is unavailable in this build environment; runtime Lua validation will occur when Hyprland starts."
+    fi
+}
+
+check_display_manager_conflict() {
+    local dm=""
+    if [[ -L /etc/systemd/system/display-manager.service ]]; then
+        dm="$(readlink -f /etc/systemd/system/display-manager.service 2>/dev/null || true)"
+    fi
+    if [[ -n "$dm" && "$dm" != */sddm.service ]]; then
+        die "Another display manager is already selected: $dm. Disable/remove that display-manager choice first, then rerun NKS. NKS will not force-replace an existing display manager."
     fi
 }
 
 configure_qylock_sddm() {
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log_info "[DRY-RUN] Would configure Qylock for SDDM only."
-        return 0
+    check_display_manager_conflict
+    local helper="$SCRIPT_DIR/scripts/qylock-sddm.sh"
+    [[ -x "$helper" ]] || die "Qylock helper is not executable."
+    log_info "Configuring Qylock for SDDM only. No secondary desktop-shell installer will be invoked."
+    if ! run "$helper"; then
+        log_warn "Qylock setup failed. Continuing with the NKS installation; SDDM remains installed and can be configured later."
     fi
-    if ! command -v sddm >/dev/null 2>&1; then
-        log_warn "SDDM is not installed; skipping Qylock integration."
-        return 0
-    fi
-    if [[ ! -x "$SCRIPT_DIR/scripts/qylock-sddm.sh" ]]; then
-        log_warn "Qylock helper missing; skipping."
-        return 0
-    fi
-    log_info "Configuring Qylock for SDDM only (no Quickshell integration)."
-    "$SCRIPT_DIR/scripts/qylock-sddm.sh" || log_warn "Qylock setup failed; continuing with the rest of NKS."
 }
 
-finalize_permissions_and_verify() {
-    log_info "Setting script permissions..."
-    execute find "$XDG_CONFIG_HOME/" -type f -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
-
-    for bin_dir in "$HOME/.local/bin/nekoroshell" "$HOME/bin/nekoroshell"; do
-        if [[ -d "$bin_dir" ]]; then
-            execute find "$bin_dir/" -type f -exec chmod +x {} + 2>/dev/null || true
-        fi
-    done
-
-    log_info "Performing final system check..."
-    local core_cmds=("hyprland" "btop" "cava" "fastfetch" "hypremoji" "waybar" "swaync" "rofi" "kitty" "wallust" "awww" "nautilus" "gnome-text-editor" "gnome-calculator" "nwg-displays" "nwg-look" "sddm")
-    local missing=0
-
-    for cmd in "${core_cmds[@]}"; do
-        if command -v "$cmd" &> /dev/null; then
-            echo -e "  [${GREEN}OK${NC}] $cmd is installed."
-        else
-            echo -e "  [${RED}!!${NC}] $cmd is missing from PATH."
-            missing=$((missing + 1))
-        fi
-    done
-
-    if [[ "$missing" -eq 0 ]]; then
-        echo -e "\n${GREEN}Everything looks good! NeKoRoSHELL is ready.${NC}"
-    else
-        echo -e "\n${RED}Warning: $missing core component(s) were not found.${NC}"
-        echo -e "If you chose 'Minimal', this is expected. Otherwise, check the logs above."
+post_install_check() {
+    log_info "Final checks."
+    sudo systemctl is-enabled sddm.service >/dev/null 2>&1 || die "sddm.service is not enabled."
+    if [[ -d /usr/share/wayland-sessions ]]; then
+        [[ -f /usr/share/wayland-sessions/hyprland.desktop ]] || log_warn "Hyprland Wayland session file was not found yet; verify the installed package if SDDM does not list Hyprland."
     fi
 
-    if [[ -x "$HOME/.config/hypr/user/hooks/post-install.sh" ]]; then
-        log_info "Executing user post-install hook..."
-        "$HOME/.config/hypr/user/hooks/post-install.sh" || log_warn "post-install hook failed."
-    fi
-    
-    echo -e "\n${GREEN}Installation complete! Please restart your session to apply all changes.${NC}"
+    cat <<MSG
+
+NeKoRoSHELL installation completed for: $TARGET_USER
+Config entrypoint: $TARGET_HOME/.config/hypr/hyprland.lua
+Backup: ${BACKUP_ARCHIVE:-none}
+SDDM: enabled
+Qylock: SDDM setup only
+GPU profile: $(cat "$TARGET_HOME/.cache/nekoroshell/gpu-profile" 2>/dev/null || echo generic)
+
+Reboot to start through SDDM:
+  systemctl reboot
+
+For an existing Hyprland/dotfiles installation, the backup above is the rollback point.
+MSG
 }
 
 main() {
-    cd "$SCRIPT_DIR" || { log_error "Failed to navigate to script directory."; exit 1; }
-    
-    parse_arguments "$@"
-    detect_runtime_user
+    parse_args "$@"
+    validate_source_tree
+    detect_os
 
-    echo -e "# ======================================================= #"
-    echo -e "#            NeKoRoSHELL Installation Wizard              #"
-    echo -e "# ======================================================= #\n"
+    # Resolve user first; if this installer was started as root, re-enter as the
+    # detected normal account. That keeps all user-owned files owned by the user.
+    find_human_user
+    reexec_as_user "$@"
+    ensure_runtime_user
+    require_user_sudo
+    check_existing_frameworks
+    check_display_manager_conflict
 
-    detect_bin_directory
-    prompt_install_type
+    # Create the rollback archive before any package installation or user configuration
+    # mutation. This keeps the existing desktop state recoverable if a later phase fails.
+    create_backup
 
-    log_info "Starting $INSTALL_TYPE installation..."
-
-    if [[ "$INSTALL_TYPE" == "compilation" ]]; then
-        detect_os
-        bootstrap_base_dependencies
-        install_system_dependencies
+    log_info "NeKoRoSHELL ${NKS_VERSION} — standalone Arch installer"
+    install_official_packages
+    ensure_aur_helper
+    configure_graphics
+    configure_networking
+    install_aur_packages
+    install_zsh_and_shell
+    install_home_files
+    atomic_deploy
+    generate_hardware_lua
+    install_binaries
+    finalize_paths_and_permissions
+    if (( DRY_RUN )); then
+        log_ok "Dry-run completed. No system or user files were modified."
+        return 0
     fi
-
-    backup_existing_configs
-    deploy_configs
-    initialize_sandbox
-    configure_hardware
-    configure_monitors
-    patch_hardcoded_paths
-    inject_shell_rc
+    verify_hyprland_version
+    verify_graphics_stack
+    verify_display_stack
+    verify_nks_tree
     configure_qylock_sddm
-
-    if [[ "$INSTALL_TYPE" == "compilation" ]]; then
-        compile_daemons_and_tools
-    fi
-
-    finalize_permissions_and_verify
+    post_install_check
 }
 
 main "$@"
