@@ -1,0 +1,40 @@
+add_newline = false
+format = "[$username](yellow bold) [$directory](blue italic) $git_branch$git_status $character"
+right_format = "$cmd_duration $time"
+
+[character]
+success_symbol = "[◎](bold bright-yellow)"
+error_symbol = "[○](italic purple)"
+
+[username]
+format = "[$user]($style)"
+style_user = "yellow bold italic"
+style_root = "purple bold italic"
+show_always = false
+
+[directory]
+home_symbol = "⌂"
+truncation_length = 2
+truncation_symbol = "□ "
+style = "italic blue"
+read_only = " ◈"
+
+[git_branch]
+format = " [$branch(:$remote_branch)]($style)"
+symbol = "[△](bold italic bright-blue)"
+style = "italic bright-blue"
+truncation_symbol = "⋯"
+truncation_length = 11
+
+[git_status]
+style = "bold italic bright-blue"
+format = "([⎪$ahead_behind$staged$modified$untracked$renamed$deleted$conflicted$stashed⎥]($style))"
+
+[cmd_duration]
+min_time = 0
+format = "[◄ $duration ](italic white)"
+
+[time]
+disabled = false
+format = "[ $time](italic dimmed white)"
+time_format = "%R"

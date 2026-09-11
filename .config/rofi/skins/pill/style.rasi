@@ -1,0 +1,85 @@
+@import "colors-wallust.rasi"
+
+* {
+    font: "JetBrains Mono 12";
+    background-color: transparent;
+}
+
+window {
+    width: 31em;
+    border: 0.125em;
+    border-color: @color13;
+    border-radius: 1.2em;
+    background-color: @background-window;
+    location: center;
+    anchor: center;
+}
+
+mainbox {
+    padding: 0.625em;
+    children: [ inputbar, listview ];
+}
+
+inputbar {
+    margin: 0em;
+    padding: 0.375em;
+    border: 0.125em;
+    border-radius: 0.3125em;
+    border-color: @color13;
+    background-color: @background-input;
+    children: [ entry ];
+}
+
+entry {
+    text-color: @text;
+    placeholder: "Search...";
+    placeholder-color: @text;
+}
+
+listview {
+    margin: 0.625em 0.125em 0em 0.125em;
+    lines: 8;
+    fixed-height: true;
+    border: 0em;
+}
+
+element {
+    padding: 0.625em;
+    border-radius: 0.3125em;
+}
+
+element-icon {
+    size: 3ch;
+    padding: 0.0625em 0.3125em 0.0625em 0.0625em;
+}
+
+element normal.normal,
+element alternate.normal {
+    background-color: transparent;
+    text-color: @text;
+}
+
+element-text {
+    vertical-align: 0.5;
+    text-color: @text;
+}
+
+element selected.normal {
+    background-color: @color5; 
+    border: 0em 0em 0.125em 0em;
+    border-color: @color13;    
+}
+
+element-text selected.normal {
+    font: "JetBrains Mono Bold 14";
+    text-color: @text;       
+}
+
+element hover {
+    background-color: @color13;
+}
+
+window { background-color: rgba(10,10,10,0.65); }
+mainbox { padding: 1em; }
+element { border-radius: 1.25em; }
+inputbar { border-radius: 1em; }
