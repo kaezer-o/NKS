@@ -88,7 +88,6 @@ vulkan-tools
 wev
 gnome-text-editor
 gnome-clocks
-gnome-control-center
 gnome-system-monitor
 gnome-calculator
 gnome-disk-utility
