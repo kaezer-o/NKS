@@ -1,171 +1,80 @@
-# Theming
+## Theming
 
-The theming system is part of the same Hyprland dotfiles tree. The main tools are:
+bash scripts that are relevant to theming are:
+- `bin/nekoroshell/customize` which handles modifying the config files to import from the selected active skin.
+- `bin/nekoroshell/quick-theme` which wraps `customize` as a quick way to apply skins for every supported package; and
+- the scripts at `.config/hypr/scripts/wallpapers` and `.config/themes/THEME/theme.sh`
+<br>
 
-- `bin/customize` — selects and applies an individual skin or theme.
-- `bin/quick-theme` — applies a complete theme combination in one operation.
-- `.config/hypr/scripts/wallpapers/` — wallpaper, colour, and video-wallpaper helpers.
-- `.config/themes/<theme>/` — complete theme entrypoints.
+### Wallpapers
 
-The repository is designed so these pieces work together from one installed tree under the user's home directory.
+Wallpapers are found in `.config/wallpapers`.
+- File detection is recursive which means you can put them in folders and it should be fine.
 
-## Wallpapers
+Wallpapers are cached in `.cache/wallpaper-thumbs/`
+- This is an optimization method to make sure the launcher (rofi) loads the images in a list faster. It also helps with decreasing the processing time of the `apply-colors.sh` bash script.
 
-Wallpapers live in `.config/wallpapers/` and are discovered recursively, so subdirectories may be used to organize larger collections.
+Image wallpapers are managed by awww, while animated wallpapers are managed by mpvpaper.
 
-Runtime wallpaper thumbnails and other temporary state are stored under the user's cache directory, normally:
+<br>
 
-```text
-~/.cache/nekoroshell/
-```
+### Making a Skin
 
-Image wallpapers are managed by `awww`; animated wallpapers are managed by `mpvpaper`. Video thumbnails and colour sampling use FFmpeg-based frame extraction so the full video does not need to be decoded for every selection.
+The directory structure of Skins are always `.config/PACKAGE/skins/SKIN/CONTENT`.
 
-## Making a skin
+Depending on the package, the relevant files that make the Skins system work may vary. Make sure to analyze the directory structure of the following `.config` folders:
+- `.config/waybar/` (Navbar)
+  - The root `config.jsonc` and `style.css` imports from the active skin.
+- `.config/rofi` (Launcher)
+  - `config.rasi` imports from the active skin.
+- `.config/hypr/hyprlock/` (Lockscreen)
+  - `hyprlock.conf` in `hypr` imports from the active hyprlock skin.
+- `.config/hypr/swaync/` (Panel/Control Centre)
+  - `json`(s) can't import, so `bin/nekoroshell/customize` copies the contents of the active skin's `config.json` file over to the root `config.json` file.
+  - `style.css` imports from the active skin.
+<br>
 
-The general structure is:
+You usually have two options when making a Skin:
+- Install someone else's packge design/setup and then manually adjust its files to follow the directory and file organization schematics; or
+- Make your own. This page won't teach you how to actually make and modify files, please read the documentation for the packages you want to make a skin for. ¯\_(ツ)_/¯
+  - You don't have to, but you can make sure it supports the Dark and Light contrast modes by importing from wallust: `.cache/wallust/your-wallust-colors.extension`
+<br>
 
-```text
-.config/<component>/skins/<skin>/...
-```
+waybar, rofi, and SwayNC Skins lets you dynamically configure hyprland `layerrule`(s).
+  - Each of them has a `layerrule.conf` file.
+  - These `layerrule.conf` files are then imported to `.config/hypr/configs/windowrules.conf` (usually found at the bottom).
+<br>
 
-Inspect the existing component directories before creating a new skin. The required files differ by component.
+Navbar Skins can utilize the Hover visibility mode via the `navbar-hover.conf` file.
+  - This gets copied over to `/home/USERNAME/.cache/navbar-hover.conf` where `bin/nekoroshell/navbar-hover` reads it.
+  - Options include `top`, `bottom`, `left`, and `right`.
+  - Activation trigger value should always be lower than the Deactivation trigger value to prevent the accidental toggling of the navbar when reaching for a tool bar on top of the window.
+<br>
 
-### Waybar navbar skins
+### Making a Theme
 
-```text
-.config/waybar/skins/<skin>/
-```
+Themes are found in `.config/themes`
 
-A navbar skin normally provides:
+To make a theme:
+1. Make a folder and name it as you please.
+2. Inside the folder, create a bash script.
+3. In the bash script, type the following:
+   ```bash
+   quick-theme WALLPAPER_SKIN NAVBAR_SKIN LAUNCHER_SKIN LOCKSCREEN_SKIN PANEL_SKIN POWER_SKIN
+   ```
+   - `*_SKIN` are placeholders and should be replaced by actual names (case-sensitive).
+   - You can even add extra logic or even triggers since it's a bash script.
+<br>
+<br>
 
-- `style.css`
-- `layout.jsonc`
-- `navbar-hover.conf`
-
-The root `.config/waybar/config.jsonc` and `.config/waybar/style.css` are switched by `customize`.
-
-`navbar-hover.conf` is copied to:
-
-```text
-~/.cache/nekoroshell/navbar-hover.conf
-```
-
-The native `navbar-hover` helper reads that file. The visibility positions are `top`, `bottom`, `left`, or `right`; keep the activation threshold below the deactivation threshold to avoid rapid toggling.
-
-### Rofi launcher skins
-
-```text
-.config/rofi/skins/<skin>/
-```
-
-A Rofi skin provides:
-
-- `config.rasi`
-- `style.rasi`
-
-The files may use the skin's local Wallust colour cache rather than a hard-coded absolute path.
-
-### Hyprlock skins
-
-```text
-.config/hypr/hyprlock/skins/<skin>/
-```
-
-The root Hyprlock configuration selects the active skin. Keep the skin self-contained so it can be copied as part of the same dotfiles tree.
-
-### SwayNC control-centre skins
-
-```text
-.config/swaync/skins/<skin>/
-```
-
-A SwayNC skin normally provides:
-
-- `config.json`
-- `style.css`
-
-`config.json` is copied into the active SwayNC configuration because JSON itself does not provide the same import mechanism used by CSS. `style.css` is switched to the selected skin.
-
-### Wlogout power skins
-
-```text
-.config/wlogout/skins/<skin>/
-```
-
-A power skin normally provides:
-
-- `layout`
-- `style.css`
-- any required assets under the skin's `assets/` directory
-
-### Hyprland window skins
-
-Hyprland 0.55+ uses the native Lua configuration path in this repository. Window skins are therefore individual Lua files:
-
-```text
-.config/hypr/nks-window-skins/<skin>.lua
-```
-
-The selector discovers every `.lua` file in that directory. The active filename is stored in:
-
-```text
-~/.cache/nekoroshell/window_skin
-```
-
-The main `.config/hypr/hyprland.lua` loads the selected skin when Hyprland starts or reloads. This keeps the window styling inside the current Lua configuration rather than generating a separate legacy compositor configuration.
-
-## Standalone colour handling
-
-Supported skins keep their own local Wallust colour cache, such as:
-
-```text
-colors-wallust.css
-colors-wallust.rasi
-```
-
-`.config/hypr/scripts/wallpapers/apply-colors.sh` updates these local cache files when Wallust regenerates colours. Avoid hard-coded usernames and absolute home-directory paths in skins; use `$HOME`, XDG paths, or the repository's existing relative layout.
-
-## Making a theme
-
-Themes live in:
-
-```text
-.config/themes/<theme>/
-```
-
-A theme is a directory containing a Bash entrypoint. The normal pattern is:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-quick-theme WALLPAPER_SKIN NAVBAR_SKIN LAUNCHER_SKIN LOCKSCREEN_SKIN PANEL_SKIN POWER_SKIN WINDOWS_SKIN
-```
-
-Replace the placeholders with actual shipped skin names. Additional logic may be added when a theme needs special wallpaper handling, palette selection, or component-specific setup.
-
-## Makima themes
-
-The repository includes `makima`, `makima-dark`, and `makima-light` themes and the bundled video wallpaper:
-
-```text
-.config/themes/makima/makima.sh
-.config/wallpapers/makima.mp4
-```
-
-It also includes a dedicated dark and light Hyprlock skins and a palette helper. `makima-dark` uses a near-black/deep-red palette; `makima-light` uses a pale warm background with dark text and restrained red accents. Both variants keep the primary text colour as the exact RGB inverse of the selected background so asynchronous wallpaper colour processing cannot change the selected palette.
-
-The bundled Makima video was supplied from a Klickpin source. Preserve the original creator/source attribution required by that source when redistributing the asset.
-
-## Validation checklist
-
-Before committing a new skin or theme, verify:
-
-1. Every file referenced by the selector actually exists.
-2. No skin contains a machine-specific username or absolute home path.
-3. The selected root configuration still points to the skin after a reload.
-4. The component can be restarted or reloaded without manual file copying outside the repository's documented runtime cache.
-5. The theme works from a clean checkout as one coherent dotfiles tree.
-
-For the shipped selectors, `bin/customize` discovers the available skins from the directories themselves, so adding a correctly structured skin is sufficient to make it selectable.
+![Screenshot](showcase/image-8.png) 
+<br>
+<br>
+<br>
+![Screenshot](showcase/image-7.png) 
+<br>
+<br>
+<br>
+![Screenshot](showcase/image-6.png) 
+<br>
+<br>

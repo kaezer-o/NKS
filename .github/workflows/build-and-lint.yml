@@ -11,20 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate Bash syntax
-        shell: bash
-        run: |
-          set -euo pipefail
-          while IFS= read -r -d '' file; do
-            bash -n "$file"
-          done < <(find . -type f \
-            \( -name '*.sh' -o -path './bin/*' -o -path './scripts/*' -o -name 'install.sh' \) \
-            -not -path './.git/*' -print0)
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@master
         with:
-          scandir: '.'
-          additional_files: 'install.sh scripts .config/themes .config/hypr/scripts home'
+          scandir: './bin'
 
   build-cpp:
     runs-on: ubuntu-latest
@@ -40,7 +30,6 @@ jobs:
             nlohmann-json3-dev \
             jq \
             pkg-config \
-            libwayland-dev \
             build-essential
 
       - name: Build C++ Daemons

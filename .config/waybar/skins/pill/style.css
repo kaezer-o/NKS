@@ -194,7 +194,4 @@ menu > *:hover {
     color: @text;
 }
 
-/* NKS expanded skin overrides */
-#waybar { padding: 0 1rem; }
-#clock,#custom-ctlcenter,#custom-logout,#power-profiles-daemon,#gleft1,#gleft2,#gright1,#gright2,#tray { border-radius: 2rem; border: 1px solid alpha(@color13,.5); }
-.modules-left,.modules-center,.modules-right { padding: .55rem; }
+/* NKS skin variant: pill */

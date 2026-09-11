@@ -194,6 +194,4 @@ menu > *:hover {
     color: @text;
 }
 
-/* NKS expanded skin overrides */
-#waybar { background: alpha(@background, 0.55); border: 1px solid alpha(@color13,0.65); }
-.modules-left,.modules-center,.modules-right { padding: .45rem .7rem; }
+/* NKS skin variant: glass */

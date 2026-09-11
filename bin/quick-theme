@@ -15,29 +15,10 @@ ORDER=("wallpaper" "navbar" "launcher" "lockscreen" "panel" "power" "windows")
 
 echo -e "\033[0;34mApplying NeKoRoSHELL Theme Components...\033[0m"
 
-# Normal themes return to dynamic Wallust colours. Theme bundles that need a
-# static palette (for example Makima) can set NKS_STATIC_PALETTE so the
-# asynchronous wallpaper worker cannot overwrite that palette during startup.
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nekoroshell"
-mkdir -p "$CACHE_DIR"
-if [[ -n "${NKS_STATIC_PALETTE:-}" ]]; then
-    printf '%s\n' "$NKS_STATIC_PALETTE" > "$CACHE_DIR/color_palette"
-else
-    rm -f "$CACHE_DIR/color_palette"
-fi
-
 for comp in "${ORDER[@]}"; do
     val="${COMPONENTS[$comp]}"
     echo -e "  \033[0;33m-> Applying $comp:\033[0m $val"
     
-    if [[ "$comp" == "windows" && ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/nks-window-skins/$val.lua" ]]; then
-        echo -e "\033[0;31mError: Missing windows skin: $val\033[0m"
-        exit 1
-    fi
-    if [[ "$comp" == "lockscreen" && ! -d "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprlock/skins/$val" ]]; then
-        echo -e "\033[0;31mError: Missing lockscreen skin: $val\033[0m"
-        exit 1
-    fi
     if ! customize "$comp" "$val" >/dev/null; then 
         echo -e "\033[0;31mError: Failed to apply $comp skin '$val'.\033[0m"
         exit 1

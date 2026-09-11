@@ -194,6 +194,4 @@ menu > *:hover {
     color: @text;
 }
 
-/* NKS expanded skin overrides */
-#clock,#custom-ctlcenter,#custom-logout,#power-profiles-daemon,#gleft1,#gleft2,#gright1,#gright2 { background: alpha(@background,.85); border: 1px solid @color13; box-shadow: 0 0 8px alpha(@color13,.35); }
-#workspaces button:selected { background: @color13; color: @text-invert; }
+/* NKS skin variant: neon */

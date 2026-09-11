@@ -194,7 +194,4 @@ menu > *:hover {
     color: @text;
 }
 
-/* NKS expanded skin overrides */
-#waybar { font-size: 8.5pt; padding: 0 .45rem; }
-.modules-left,.modules-center,.modules-right { padding: .35rem; margin-left:.15rem; margin-right:.15rem; }
-#workspaces button { margin: 0 .2rem; }
+/* NKS skin variant: compact */

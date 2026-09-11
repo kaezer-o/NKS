@@ -194,7 +194,4 @@ menu > *:hover {
     color: @text;
 }
 
-/* NKS expanded skin overrides */
-#waybar { font-size: 8pt; padding: 0 .5rem; }
-.modules-left,.modules-center,.modules-right { padding: .3rem .35rem; margin-left:.25rem; margin-right:.25rem; }
-#clock,#custom-ctlcenter,#custom-logout,#power-profiles-daemon,#gleft1,#gleft2,#gright1,#gright2 { background: transparent; border-bottom: 1px solid @color5; }
+/* NKS skin variant: minimal */

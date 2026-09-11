@@ -1,10 +1,10 @@
-@import "colors-wallust.css";
+@import "$HOME/.cache/wallust/colors-waybar.css";
 
 * { background-image: none; box-shadow: none; }
-window { background-color: @background-window; }
+window { background-color: rgba(12, 12, 12, 0.9); }
 
 button {
-    margin: 0.625rem;
+    margin: 0.25rem;
     border-radius: 0.625rem;
     border: none;
     border-bottom: 0.3125rem solid @color13;
@@ -69,5 +69,3 @@ button:hover {
     background-image: image(url("./assets/reboot-hover.png")), 
                       linear-gradient(to bottom, alpha(black, 0), alpha(@color5, 0.5)); 
 }
-
-window { background-color: @background-window; } button { margin: .35rem; border-bottom-width: .15rem; background-color: rgba(255,255,255,.04); }
