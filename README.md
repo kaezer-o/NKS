@@ -1,61 +1,67 @@
-<div align="center">
-
 # NeKoRoSHELL
 
-A modular Hyprland desktop configuration focused on clean theming, practical defaults, and reproducible installation.
+A standalone Hyprland configuration for Arch Linux.
 
-![Hyprland](https://img.shields.io/badge/WM-Hyprland-00A4FF?style=for-the-badge)
-![Arch Linux](https://img.shields.io/badge/Primary%20Target-Arch%20Linux-1793D1?style=for-the-badge)
-![License](https://img.shields.io/github/license/NeKoRoSYS/NeKoRoSHELL?style=for-the-badge)
+NeKoRoSHELL provides a complete Wayland desktop environment built around Hyprland, with its configuration, themes, utilities, scripts, and supporting components maintained as a single project.
 
-</div>
+## Credits
+
+NeKoRoSHELL makes use of and builds upon several open-source projects.
+
+### Core Projects
+
+- [Hyprland](https://github.com/hyprwm/Hyprland)
+- [Rofi](https://github.com/davatorium/rofi)
+- [Waybar](https://github.com/Alexays/Waybar)
+- [SwayNotificationCenter](https://github.com/ErikReider/SwayNotificationCenter)
+- [wlogout](https://github.com/ArtsyMacaw/wlogout)
+- [Kitty](https://github.com/kovidgoyal/kitty)
+- [Zsh](https://www.zsh.org/)
+- [Wallust](https://codeberg.org/explosion-mental/wallust)
+- [nwg-shell](https://github.com/nwg-piotr)
+
+### Qylock
+
+The SDDM lockscreen integration uses **Qylock** by **Darkkal44**.
+
+- [Qylock](https://github.com/Darkkal44/Qylock)
+- Author: [Darkkal44](https://github.com/Darkkal44)
+
+### GNOME
+
+Several GNOME applications are used as desktop utilities within the configuration.
+
+- [GNOME](https://www.gnome.org/)
+
+## Acknowledgements
+
+Special thanks to the developers, maintainers, and contributors of the projects above and to the wider Linux, Wayland, Hyprland, and Arch Linux communities.
+
+Additional inspiration and reference material for parts of the configuration came from the work of:
+
+- JaKooLit
+- S-e-r-a-p-h-i-n-e
+- April
+- MiroBG
+- justinmdickey
+- mkhmtolzhas
+
+Their work helped influence various ideas, configuration approaches, workflows, and visual elements used during the development of NeKoRoSHELL.
+
+All third-party projects and their respective authors retain ownership of their original work. NeKoRoSHELL does not claim ownership of third-party software, code, assets, or designs.
+
+## Third-Party Software
+
+NeKoRoSHELL includes or integrates software developed by other projects. Each third-party component remains subject to its own license.
+
+Please refer to the original project repositories and license files for the applicable licensing terms.
+
+## License
+
+NeKoRoSHELL is distributed under its own project license where applicable.
+
+Third-party software, themes, fonts, icons, scripts, wallpapers, and other included or referenced assets remain governed by their respective licenses.
 
 ---
 
-## Overview
-
-NeKoRoSHELL is a standalone Hyprland desktop configuration and customization framework.
-
-It provides:
-
-- Hyprland configuration and keybindings
-- Waybar navbar
-- Rofi application launcher and customization menus
-- SwayNC notification/control panel
-- Hyprlock lockscreen
-- Wlogout power menu
-- Kitty terminal
-- Wallust-based dynamic color generation
-- Wallpaper management with `awww`
-- Animated wallpaper support with `mpvpaper`
-- Modular component skins
-- Complete desktop themes
-- Hardware-aware graphics configuration
-- Automatic monitor detection
-- SDDM integration with Qylock
-- Zsh configuration
-- GNOME desktop utilities without installing a complete GNOME session
-
-The primary and tested installation target is Arch Linux.
-
----
-
-# Installation
-
-## Requirements
-
-Start with a working Arch Linux installation.
-
-The installer expects:
-
-- `sudo`
-- `git`
-- a normal non-root user
-- working network access
-- a configured Arch package repository
-
-The installer can be run directly from the repository.
-
-```bash
-git clone https://github.com/NeKoRoSYS/NeKoRoSHELL.git
-cd NeKoRoSHELL
+**NeKoRoSHELL**
